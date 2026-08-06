@@ -4,6 +4,7 @@ from app.core.config import Settings, get_settings
 from app.core.postgres import check_postgres_health
 from app.core.qdrant import check_qdrant_health
 from app.core.redis import check_redis_health
+from app.core.storage import check_storage_health
 from app.schemas.health import HealthResponse, ServiceHealth
 
 router = APIRouter(tags=["health"])
@@ -20,6 +21,7 @@ def health(
         ),
         "redis": ServiceHealth(status="ok" if check_redis_health() else "degraded"),
         "qdrant": ServiceHealth(status="ok" if check_qdrant_health() else "degraded"),
+        "storage": ServiceHealth(status="ok" if check_storage_health() else "degraded"),
     }
     all_ok = all(component.status == "ok" for component in components.values())
     if not all_ok:

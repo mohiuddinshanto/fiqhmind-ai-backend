@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.postgres import get_db
 from app.core.qdrant import QdrantStore, get_qdrant_client, get_qdrant_store
 from app.core.redis import get_redis
+from app.core.storage import StorageProvider, get_storage_provider
 from app.services.cache import CacheService
 from app.services.rate_limit import RateLimitStore
 
@@ -30,6 +31,10 @@ def get_store_dep() -> QdrantStore:
     return get_qdrant_store()
 
 
+def get_storage_dep() -> StorageProvider:
+    return get_storage_provider()
+
+
 __all__ = [
     "DbSession",
     "get_cache_service",
@@ -38,5 +43,7 @@ __all__ = [
     "get_qdrant_store",
     "get_rate_limiter",
     "get_redis",
+    "get_storage_dep",
+    "get_storage_provider",
     "get_store_dep",
 ]

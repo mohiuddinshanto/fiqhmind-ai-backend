@@ -43,3 +43,43 @@ class IngestionError(BaseAppError):
 class EvidenceInsufficientError(BaseAppError):
     status_code = 422
     code = "evidence_insufficient"
+
+
+class UploadValidationError(BaseAppError):
+    status_code = 422
+    code = "upload_validation_error"
+
+
+class UploadTooLargeError(BaseAppError):
+    status_code = 413
+    code = "upload_too_large"
+
+
+class DuplicateUploadError(BaseAppError):
+    status_code = 409
+    code = "duplicate_upload"
+
+
+class ExtractionConflictError(BaseAppError):
+    status_code = 409
+    code = "extraction_conflict"
+
+
+class LayoutConflictError(BaseAppError):
+    status_code = 409
+    code = "layout_conflict"
+
+
+class MalformedPdfError(BaseAppError):
+    status_code = 422
+    code = "malformed_pdf"
+
+
+class EncryptedPdfError(BaseAppError):
+    status_code = 422
+    code = "encrypted_pdf"
+
+
+class TransientExtractionError(BaseAppError):
+    status_code = 500
+    code = "extraction_retry"

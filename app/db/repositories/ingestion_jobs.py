@@ -2,11 +2,13 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from app.db.models import IngestionJob
+from app.db.models import IngestionError, IngestionJob
 from app.db.repositories.base import RepositoryBase
 
 VALID_STATUSES = {
     "uploaded",
+    "queued",
+    "processing",
     "sanitizing",
     "extracting",
     "ocr",
@@ -15,6 +17,7 @@ VALID_STATUSES = {
     "chunking",
     "embedding",
     "indexed",
+    "completed",
     "failed",
 }
 
@@ -24,6 +27,40 @@ class IngestionJobRepository(RepositoryBase[IngestionJob]):
 
     def create_for_book(self, book_id: str, kind: str = "initial") -> IngestionJob:
         return self.create(IngestionJob(book_id=book_id, kind=kind, status="uploaded"))
+
+    def create_for_upload(self, upload_id: str, kind: str = "initial") -> IngestionJob:
+        return self.create(IngestionJob(upload_id=upload_id, kind=kind, status="uploaded"))
+
+    def find_for_upload(self, upload_id: str, kind: str) -> IngestionJob | None:
+        """Most recent job of `kind` for an upload, if any."""
+        return self._session.scalar(
+            select(IngestionJob)
+            .where(IngestionJob.upload_id == upload_id, IngestionJob.kind == kind)
+            .order_by(IngestionJob.created_at.desc())
+            .limit(1)
+        )
+
+    def find_pipeline_job(self, upload_id: str) -> IngestionJob | None:
+        """Most recent non-layout pipeline job (extraction) for an upload, if any."""
+        return self._session.scalar(
+            select(IngestionJob)
+            .where(IngestionJob.upload_id == upload_id, IngestionJob.kind != "layout")
+            .order_by(IngestionJob.created_at.desc())
+            .limit(1)
+        )
+
+    def add_error(
+        self,
+        job: IngestionJob,
+        step: str,
+        message: str,
+        *,
+        details: dict | None = None,
+    ) -> IngestionError:
+        error = IngestionError(job_id=job.id, step=step, message=message, details=details)
+        self._session.add(error)
+        self._session.commit()
+        return error
 
     def update_status(
         self,
@@ -43,7 +80,7 @@ class IngestionJobRepository(RepositoryBase[IngestionJob]):
             job.current_step = current_step
         if error_message is not None:
             job.error_message = error_message
-        if status in ("indexed", "failed"):
+        if status in ("indexed", "completed", "failed"):
             job.finished_at = datetime.utcnow()
         return self.update(job)
 

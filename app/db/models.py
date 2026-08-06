@@ -212,7 +212,7 @@ class Chunk(TimestampMixin, Base):
     __tablename__ = "chunks"
     __table_args__ = (
         CheckConstraint(
-            "region IN ('main', 'footnote', 'margin', 'header', 'footer')",
+            "region IN ('main', 'footnote', 'margin', 'header', 'footer', 'unknown')",
             name="region",
         ),
         Index("ix_chunks_book_region_verified", "book_id", "region", "verified"),
@@ -265,18 +265,21 @@ class IngestionJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "ingestion_jobs"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('initial', 'reindex', 'ocr')",
+            "kind IN ('initial', 'reindex', 'ocr', 'extraction', 'layout')",
             name="kind",
         ),
         CheckConstraint(
-            "status IN ('uploaded', 'sanitizing', 'extracting', 'ocr', 'ocr_correcting', "
-            "'structuring', 'chunking', 'embedding', 'indexed', 'failed')",
+            "status IN ('uploaded', 'queued', 'processing', 'sanitizing', 'extracting', "
+            "'ocr', 'ocr_correcting', 'structuring', 'chunking', 'embedding', 'indexed', "
+            "'completed', 'failed')",
             name="status",
         ),
         CheckConstraint("progress_percent BETWEEN 0 AND 100", name="progress_range"),
     )
 
-    book_id: Mapped[str] = mapped_column(ForeignKey("books.id"), nullable=False, index=True)
+    # book_id is nullable: an upload job exists before book metadata is known.
+    book_id: Mapped[str | None] = mapped_column(ForeignKey("books.id"), index=True)
+    upload_id: Mapped[str | None] = mapped_column(ForeignKey("uploads.id"), index=True)
     kind: Mapped[str] = mapped_column(String(20), default="initial", nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="uploaded", nullable=False, index=True)
     current_step: Mapped[str | None] = mapped_column(String(30))
@@ -285,8 +288,12 @@ class IngestionJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    book: Mapped[Book] = relationship(back_populates="ingestion_jobs")
+    book: Mapped[Book | None] = relationship(back_populates="ingestion_jobs")
+    upload: Mapped["Upload | None"] = relationship(back_populates="ingestion_job")
     errors: Mapped[list["IngestionError"]] = relationship(
+        back_populates="job", cascade="all, delete-orphan"
+    )
+    page_extractions: Mapped[list["PageExtraction"]] = relationship(
         back_populates="job", cascade="all, delete-orphan"
     )
 
@@ -309,6 +316,205 @@ class IngestionError(UUIDPrimaryKeyMixin, Base):
 
     def __repr__(self) -> str:
         return f"<IngestionError step={self.step}>"
+
+
+class Upload(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "uploads"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('uploading', 'uploaded', 'queued', 'processing', 'completed', 'failed')",
+            name="status",
+        ),
+        Index("ix_uploads_sha256", "sha256", unique=True),
+    )
+
+    # original_filename: the client-provided name (sanitized, display-safe).
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    # filename: the object name inside the storage backend (generated, unique).
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    sha256: Mapped[str | None] = mapped_column(String(64))
+    size: Mapped[int | None] = mapped_column(Integer)
+    mime: Mapped[str | None] = mapped_column(String(100))
+    page_count: Mapped[int | None] = mapped_column(Integer)
+    storage_path: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(20), default="uploading", nullable=False, index=True)
+    received_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+    ingestion_job: Mapped["IngestionJob | None"] = relationship(
+        back_populates="upload", uselist=False
+    )
+    logs: Mapped[list["UploadLog"]] = relationship(
+        back_populates="upload", cascade="all, delete-orphan"
+    )
+
+    @property
+    def uploaded_at(self) -> datetime:
+        """The upload record creation timestamp (API field alias)."""
+        return self.created_at
+
+    def __repr__(self) -> str:
+        return f"<Upload {self.original_filename} status={self.status}>"
+
+
+class UploadLog(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "upload_logs"
+
+    upload_id: Mapped[str] = mapped_column(ForeignKey("uploads.id"), nullable=False, index=True)
+    event: Mapped[str] = mapped_column(String(50), nullable=False)
+    message: Mapped[str | None] = mapped_column(Text)
+    details: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    upload: Mapped[Upload] = relationship(back_populates="logs")
+
+    def __repr__(self) -> str:
+        return f"<UploadLog {self.event}>"
+
+
+class PageExtraction(UUIDPrimaryKeyMixin, Base):
+    """One extracted PDF page (Phase 4 — coordinates preserved, no layout labels)."""
+
+    __tablename__ = "page_extractions"
+    __table_args__ = (
+        UniqueConstraint("job_id", "page_number", name="uq_page_extractions_job_page"),
+    )
+
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("ingestion_jobs.id"), nullable=False, index=True
+    )
+    page_number: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-based
+    width: Mapped[float] = mapped_column(Float, nullable=False)
+    height: Mapped[float] = mapped_column(Float, nullable=False)
+    rotation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    has_text: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    char_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    block_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    image_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    drawing_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    job: Mapped[IngestionJob] = relationship(back_populates="page_extractions")
+    blocks: Mapped[list["PageBlock"]] = relationship(
+        back_populates="page", cascade="all, delete-orphan"
+    )
+    images: Mapped[list["PageImage"]] = relationship(
+        back_populates="page", cascade="all, delete-orphan"
+    )
+    drawings: Mapped[list["PageDrawing"]] = relationship(
+        back_populates="page", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return f"<PageExtraction job={self.job_id[:8]}… page={self.page_number}>"
+
+
+class PageBlock(UUIDPrimaryKeyMixin, Base):
+    """A text block with its spans. Region/order are set by the Phase 5 layout engine."""
+
+    __tablename__ = "page_blocks"
+    __table_args__ = (
+        UniqueConstraint("page_extraction_id", "block_index", name="uq_page_blocks_page_index"),
+        CheckConstraint(
+            "region IN ('main', 'footnote', 'margin', 'header', 'footer', 'unknown')",
+            name="ck_page_blocks_region",
+        ),
+    )
+
+    page_extraction_id: Mapped[str] = mapped_column(
+        ForeignKey("page_extractions.id"), nullable=False, index=True
+    )
+    block_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    bbox: Mapped[list] = mapped_column(JSON, nullable=False)  # [x0, y0, x1, y1]
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    font: Mapped[str | None] = mapped_column(String(255))
+    font_size: Mapped[float | None] = mapped_column(Float)
+    span_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    region: Mapped[str] = mapped_column(String(20), default="unknown", nullable=False)
+    reading_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    classification_reason: Mapped[str | None] = mapped_column(String(500))
+
+    page: Mapped[PageExtraction] = relationship(back_populates="blocks")
+    spans: Mapped[list["PageSpan"]] = relationship(
+        back_populates="block", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return f"<PageBlock {self.block_index} region={self.region}>"
+
+
+class PageSpan(UUIDPrimaryKeyMixin, Base):
+    """A single span (same font+size run) inside a block, with its own bbox."""
+
+    __tablename__ = "page_spans"
+    __table_args__ = (
+        UniqueConstraint("block_id", "span_index", name="uq_page_spans_block_index"),
+    )
+
+    block_id: Mapped[str] = mapped_column(ForeignKey("page_blocks.id"), nullable=False, index=True)
+    span_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    font: Mapped[str] = mapped_column(String(255), nullable=False)
+    font_size: Mapped[float] = mapped_column(Float, nullable=False)
+    bbox: Mapped[list] = mapped_column(JSON, nullable=False)
+    flags: Mapped[int | None] = mapped_column(Integer)
+
+    block: Mapped[PageBlock] = relationship(back_populates="spans")
+
+    def __repr__(self) -> str:
+        return f"<PageSpan {self.font} {self.font_size}>"
+
+
+class PageImage(UUIDPrimaryKeyMixin, Base):
+    """An image object on a page (pixel dims from the embedded image)."""
+
+    __tablename__ = "page_images"
+    __table_args__ = (
+        UniqueConstraint("page_extraction_id", "image_index", name="uq_page_images_page_index"),
+    )
+
+    page_extraction_id: Mapped[str] = mapped_column(
+        ForeignKey("page_extractions.id"), nullable=False, index=True
+    )
+    image_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    bbox: Mapped[list] = mapped_column(JSON, nullable=False)  # [x0, y0, x1, y1]
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
+    xref: Mapped[int | None] = mapped_column(Integer)
+
+    page: Mapped[PageExtraction] = relationship(back_populates="images")
+
+    def __repr__(self) -> str:
+        return f"<PageImage {self.image_index}>"
+
+
+class PageDrawing(UUIDPrimaryKeyMixin, Base):
+    """A vector drawing object on a page (rect/line/curve/quad)."""
+
+    __tablename__ = "page_drawings"
+    __table_args__ = (
+        UniqueConstraint("page_extraction_id", "drawing_index", name="uq_page_drawings_page_index"),
+    )
+
+    page_extraction_id: Mapped[str] = mapped_column(
+        ForeignKey("page_extractions.id"), nullable=False, index=True
+    )
+    drawing_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    bbox: Mapped[list] = mapped_column(JSON, nullable=False)  # [x0, y0, x1, y1]
+    kind: Mapped[str | None] = mapped_column(String(10))  # 'f' | 's' | 'fs'
+    stroke_width: Mapped[float | None] = mapped_column(Float)
+
+    page: Mapped[PageExtraction] = relationship(back_populates="drawings")
+
+    def __repr__(self) -> str:
+        return f"<PageDrawing {self.kind}>"
 
 
 class Bookmark(UUIDPrimaryKeyMixin, TimestampMixin, Base):

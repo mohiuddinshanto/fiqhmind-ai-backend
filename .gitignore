@@ -15,3 +15,6 @@ htmlcov/
 .env
 .env.*
 !.env.example
+
+# Uploaded files (local storage provider)
+storage/
