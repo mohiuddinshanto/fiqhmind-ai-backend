@@ -45,6 +45,23 @@ class Settings(BaseSettings):
     # Reciprocal Rank Fusion constant (ARCHITECTURE §Phase 8: k ≈ 60).
     vector_rrf_k: int = 60
 
+    # Retrieval pipeline (Phase 9). The fastText language head, free-tier
+    # translation APIs, and the BGE-reranker-v2-m3 weights are external
+    # dependencies; the pipeline ships dependency-free default adapters behind
+    # the same interfaces (`heuristic`, `passthrough`, `default`) until those
+    # land. `retrieval_llm_expansion_enabled` gates the external LLM paraphrase
+    # step (ARCHITECTURE step 4) so it is off until a provider is configured.
+    language_detector_provider: str = "heuristic"  # heuristic | fasttext (later)
+    translator_provider: str = "passthrough"  # passthrough | google_free | gemini (later)
+    reranker_provider: str = "default"  # default | bge_reranker_v2_m3 (later)
+    retrieval_top_n: int = 8
+    retrieval_candidates: int = 40
+    retrieval_max_variants: int = 5
+    retrieval_evidence_floor: float = 0.05
+    retrieval_llm_expansion_enabled: bool = False
+    retrieval_reranking_enabled: bool = True
+    query_max_length: int = 500
+
     # Rate limiting defaults (per Phase 14)
     rate_limit_chat_per_min: int = 20
     rate_limit_search_per_min: int = 60

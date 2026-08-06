@@ -703,6 +703,47 @@ class ChatHistory(UUIDPrimaryKeyMixin, Base):
         return f"<ChatHistory user={self.user_id}>"
 
 
+class TermRelation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One directed, auditable fiqh term-relation edge (Phase 9 lexicon graph).
+
+    ARCHITECTURE §Phase 9 "Knowledge Graph Expansion": a flat Postgres table
+    `term_relations` — term ↔ related_term ↔ relation_type — populated once from
+    the Kitab/Bab lexicon plus manually curated fiqh-term relationships. At query
+    time a matched term triggers a 1-hop lookup; every edge is deliberate (never
+    learned), so the graph stays auditable and needs no dedicated graph store.
+    """
+
+    __tablename__ = "term_relations"
+    __table_args__ = (
+        UniqueConstraint(
+            "primary_term",
+            "related_term",
+            "relation_type",
+            name="uq_term_relations_edge",
+        ),
+        CheckConstraint(
+            "relation_type IN ('synonym', 'antonym', 'hyponym', 'broader', "
+            "'narrower', 'related')",
+            name="ck_term_relations_relation_type",
+        ),
+        CheckConstraint(
+            "confidence BETWEEN 0 AND 1", name="ck_term_relations_confidence"
+        ),
+        Index("ix_term_relations_primary_term", "primary_term"),
+        Index("ix_term_relations_related_term", "related_term"),
+    )
+
+    primary_term: Mapped[str] = mapped_column(String(255), nullable=False)
+    related_term: Mapped[str] = mapped_column(String(255), nullable=False)
+    relation_type: Mapped[str] = mapped_column(
+        String(20), default="synonym", nullable=False
+    )
+    confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+
+    def __repr__(self) -> str:
+        return f"<TermRelation {self.primary_term} —{self.relation_type}— {self.related_term}>"
+
+
 class AuditLog(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "audit_log"
 

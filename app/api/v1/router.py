@@ -7,6 +7,7 @@ from app.api.v1.endpoints import (
     indexing,
     layout,
     metadata,
+    retrieval,
     uploads,
 )
 
@@ -18,3 +19,4 @@ api_router.include_router(layout.router)
 api_router.include_router(metadata.router)
 api_router.include_router(chunking.router)
 api_router.include_router(indexing.router)
+api_router.include_router(retrieval.router)

@@ -85,6 +85,21 @@ class IndexConflictError(BaseAppError):
     code = "indexing_conflict"
 
 
+class QueryValidationError(BaseAppError):
+    status_code = 422
+    code = "query_validation_error"
+
+
+class TranslationError(BaseAppError):
+    status_code = 502
+    code = "translation_error"
+
+
+class RerankerError(BaseAppError):
+    status_code = 502
+    code = "reranker_error"
+
+
 class MalformedPdfError(BaseAppError):
     status_code = 422
     code = "malformed_pdf"
