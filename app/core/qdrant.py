@@ -20,7 +20,12 @@ def create_qdrant_client(settings: Settings) -> QdrantClient:
 
 
 class QdrantStore:
-    """Owns the `fiqh_chunks` collection: idempotent creation + payload indexes."""
+    """Owns the `fiqh_chunks` collection: idempotent creation + payload indexes.
+
+    Also exposes the four vector operations the ingestion + serving pipelines
+    need (Phase 8): batch upsert, filter-scoped delete, and dense/sparse
+    searches that the hybrid-search layer fuses with Reciprocal Rank Fusion.
+    """
 
     def __init__(
         self,
@@ -75,6 +80,53 @@ class QdrantStore:
                     field_name=field,
                     field_schema=models.PayloadSchemaType.KEYWORD,
                 )
+
+    def upsert_points(self, points: list[models.PointStruct]) -> None:
+        """Upsert a batch of chunk points (dense + sparse vector + payload)."""
+        self._client.upsert(collection_name=self._collection, points=points)
+
+    def delete_by_filter(self, filter_: models.Filter) -> None:
+        """Delete every point matching `filter_` (used for idempotent re-index)."""
+        self._client.delete(
+            collection_name=self._collection,
+            points_selector=models.FilterSelector(filter=filter_),
+        )
+
+    def search_dense(
+        self,
+        vector: list[float],
+        *,
+        limit: int,
+        filter_: models.Filter | None = None,
+    ) -> list[models.ScoredPoint]:
+        """Cosine search against the unnamed dense vector."""
+        return self._query(vector, limit=limit, filter_=filter_)
+
+    def search_sparse(
+        self,
+        vector: models.SparseVector,
+        *,
+        limit: int,
+        filter_: models.Filter | None = None,
+    ) -> list[models.ScoredPoint]:
+        """Lexical search against the named sparse vector."""
+        return self._query(vector, limit=limit, filter_=filter_)
+
+    def _query(
+        self,
+        query: list[float] | models.SparseVector,
+        *,
+        limit: int,
+        filter_: models.Filter | None,
+    ) -> list[models.ScoredPoint]:
+        response = self._client.query_points(
+            collection_name=self._collection,
+            query=query,
+            limit=limit,
+            query_filter=filter_,
+            with_payload=True,
+        )
+        return list(response.points) if response is not None else []
 
 
 _client: QdrantClient | None = None

@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     qdrant_vector_size: int = 1024  # BGE-M3 dense dimension
     qdrant_vector_distance: str = "Cosine"
 
+    # Embedding + hybrid search (Phase 8). The vector DB layer depends on an
+    # embedding interface, not the BGE-M3 model itself (ARCHITECTURE Phase 7);
+    # `deterministic` is the dependency-free adapter used for tests/local runs.
+    embedding_provider: str = "deterministic"  # deterministic | bge_m3 (later phase)
+    # Reciprocal Rank Fusion constant (ARCHITECTURE §Phase 8: k ≈ 60).
+    vector_rrf_k: int = 60
+
     # Rate limiting defaults (per Phase 14)
     rate_limit_chat_per_min: int = 20
     rate_limit_search_per_min: int = 60

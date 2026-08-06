@@ -411,7 +411,7 @@ class IngestionJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint(
             "kind IN ('initial', 'reindex', 'ocr', 'extraction', 'layout', 'metadata', "
-            "'chunking')",
+            "'chunking', 'indexing')",
             name="kind",
         ),
         CheckConstraint(

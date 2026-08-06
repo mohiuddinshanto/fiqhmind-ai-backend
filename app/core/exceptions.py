@@ -80,6 +80,11 @@ class ChunkConflictError(BaseAppError):
     code = "chunking_conflict"
 
 
+class IndexConflictError(BaseAppError):
+    status_code = 409
+    code = "indexing_conflict"
+
+
 class MalformedPdfError(BaseAppError):
     status_code = 422
     code = "malformed_pdf"

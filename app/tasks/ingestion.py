@@ -1,4 +1,4 @@
-"""Celery tasks for the ingestion pipeline (Phases 3 + 4 + 5 + 6 + 7).
+"""Celery tasks for the ingestion pipeline (Phases 3 + 4 + 5 + 6 + 7 + 8).
 
 Phase 3 enqueues accepted uploads (`mark_queued`). Phase 4 adds the PDF
 extraction worker (`extract_pdf_task`). Phase 5 adds the layout worker
@@ -6,6 +6,8 @@ extraction worker (`extract_pdf_task`). Phase 5 adds the layout worker
 which extracts bibliographic/structural metadata and the page mapping.
 Phase 7 adds the chunking worker (`run_chunking_task`) which turns that
 metadata + page mapping into structure-aware, page-anchored chunks.
+Phase 8 adds the indexing worker (`run_indexing_task`) which embeds and
+upserts those chunks into the Qdrant vector store.
 """
 
 import structlog
@@ -14,14 +16,17 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import (
     ChunkConflictError,
     EncryptedPdfError,
+    IndexConflictError,
     MalformedPdfError,
 )
 from app.core.postgres import get_session_factory
+from app.core.qdrant import get_qdrant_store
 from app.core.storage import get_storage_provider
 from app.db.models import IngestionJob, Upload
 from app.db.repositories import IngestionJobRepository, UploadRepository
 from app.services.chunking import ChunkRunner
 from app.services.extraction import ExtractionRunner
+from app.services.indexing import IndexingRunner
 from app.services.layout import LayoutRunner
 from app.services.metadata import MetadataRunner
 from app.worker.celery_app import celery_app
@@ -220,6 +225,67 @@ def run_metadata_task(self, job_id: str, upload_id: str) -> None:
 
 def _retry_countdown(retries: int) -> int:
     return min(2**retries * 10, 120)
+
+
+@celery_app.task(
+    name="app.tasks.ingestion.run_indexing_task",
+    bind=True,
+    max_retries=MAX_RETRIES,
+    retry_backoff=True,
+    retry_backoff_max=120,
+    retry_jitter=True,
+)
+def run_indexing_task(self, job_id: str, upload_id: str, chunking_job_id: str) -> None:
+    """Run Phase 8 vector indexing: embed + upsert chunks into Qdrant.
+
+    Indexing depends on the Qdrant store and the configured embedder, so most
+    failures are transient (store unreachable, network) and are retried with
+    backoff. A missing chunking run or metadata document is a permanent failure
+    and fails the job immediately.
+    """
+    session = get_session_factory()()
+    job = None
+    upload = None
+    try:
+        job_repo = IngestionJobRepository(session)
+        upload_repo = UploadRepository(session)
+        job = job_repo.get(job_id)
+        upload = upload_repo.get(upload_id)
+        if job is None or upload is None:
+            logger.warning("indexing_job_missing", job_id=job_id, upload_id=upload_id)
+            return
+
+        result = IndexingRunner(session, get_qdrant_store()).run(
+            job, upload, chunking_job_id=chunking_job_id
+        )
+        job_repo.update_status(job, "indexed", progress_percent=100, current_step="embedding")
+        upload.status = "completed"
+        session.commit()
+        logger.info(
+            "indexing_completed",
+            job_id=job_id,
+            upload_id=upload_id,
+            page_count=result.page_count,
+            chunk_count=result.chunk_count,
+            vectors_indexed=result.vectors_indexed,
+        )
+    except IndexConflictError as exc:
+        session.rollback()
+        _record_error_and_fail(session, job, upload, exc.message, permanent=True, step="indexing")
+        logger.warning("indexing_permanent_failure", job_id=job_id, error=exc.message)
+    except Exception as exc:  # noqa: BLE001 - transient failures are retried
+        session.rollback()
+        if job is not None:
+            IngestionJobRepository(session).add_error(job, "indexing", str(exc))
+        if self.request.retries < MAX_RETRIES:
+            logger.warning(
+                "indexing_retrying", job_id=job_id, retry=self.request.retries + 1, error=str(exc)
+            )
+            raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+        _record_error_and_fail(session, job, upload, str(exc), step="indexing", permanent=True)
+        logger.warning("indexing_retries_exhausted", job_id=job_id, error=str(exc))
+    finally:
+        session.close()
 
 
 @celery_app.task(
