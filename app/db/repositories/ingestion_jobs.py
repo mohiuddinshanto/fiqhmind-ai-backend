@@ -41,10 +41,17 @@ class IngestionJobRepository(RepositoryBase[IngestionJob]):
         )
 
     def find_pipeline_job(self, upload_id: str) -> IngestionJob | None:
-        """Most recent non-layout pipeline job (extraction) for an upload, if any."""
+        """Most recent pipeline (non-analysis) job for an upload, if any.
+
+        Excludes the `layout` and `metadata` analysis kinds so callers (layout
+        and metadata endpoints) always find the underlying extraction job.
+        """
         return self._session.scalar(
             select(IngestionJob)
-            .where(IngestionJob.upload_id == upload_id, IngestionJob.kind != "layout")
+            .where(
+                IngestionJob.upload_id == upload_id,
+                IngestionJob.kind.notin_(("layout", "metadata")),
+            )
             .order_by(IngestionJob.created_at.desc())
             .limit(1)
         )

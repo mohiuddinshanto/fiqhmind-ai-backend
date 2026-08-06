@@ -261,11 +261,149 @@ class Chunk(TimestampMixin, Base):
         return f"<Chunk {self.chunk_id[:8]}… region={self.region}>"
 
 
+class MetadataDocument(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Run-level container for one upload's extracted metadata (Phase 6).
+
+    Bibliographic + structural fields live in `MetadataField`, per-page
+    numbering in `PageMetadata`, hierarchical sections in `MetadataStructure`.
+    Nothing here writes into books/volumes/pages — chunking is a later phase.
+    """
+
+    __tablename__ = "metadata_documents"
+    __table_args__ = (
+        UniqueConstraint("job_id", name="uq_metadata_documents_job"),
+    )
+
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("ingestion_jobs.id"), nullable=False, index=True
+    )
+    upload_id: Mapped[str] = mapped_column(ForeignKey("uploads.id"), nullable=False, index=True)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    page_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    numbering_system: Mapped[str] = mapped_column(
+        String(20), default="none", nullable=False
+    )
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+
+    fields: Mapped[list["MetadataField"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+    pages: Mapped[list["PageMetadata"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+    structures: Mapped[list["MetadataStructure"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return f"<MetadataDocument {self.original_filename} numbering={self.numbering_system}>"
+
+
+class MetadataField(UUIDPrimaryKeyMixin, Base):
+    """One extracted metadata field with its confidence and provenance.
+
+    Every field carries (value, confidence, extraction source) as required by
+    Phase 6 — e.g. title from the filename vs. from the cover page.
+    """
+
+    __tablename__ = "metadata_fields"
+    __table_args__ = (
+        UniqueConstraint("document_id", "field", name="uq_metadata_fields_document_field"),
+        CheckConstraint("confidence BETWEEN 0 AND 1", name="ck_metadata_fields_confidence"),
+    )
+
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("metadata_documents.id"), nullable=False, index=True
+    )
+    field: Mapped[str] = mapped_column(String(50), nullable=False)
+    value: Mapped[str | None] = mapped_column(Text)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    source: Mapped[str] = mapped_column(String(50), nullable=False)
+    details: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    document: Mapped[MetadataDocument] = relationship(back_populates="fields")
+
+    def __repr__(self) -> str:
+        return f"<MetadataField {self.field}={self.value!r}>"
+
+
+class PageMetadata(UUIDPrimaryKeyMixin, Base):
+    """PDF page → printed page mapping. Both values are always stored.
+
+    `printed_page` keeps the raw label (Arabic-Indic digits, Roman numerals,
+    Latin digits, or a mixed label); `printed_page_numeric` is the normalized
+    value used for continuity checks. Current structural context (kitab/bab/fasl)
+    is copied here per page so later chunking can attach chapter context.
+    """
+
+    __tablename__ = "page_metadata"
+    __table_args__ = (
+        UniqueConstraint("document_id", "pdf_page", name="uq_page_metadata_document_page"),
+        CheckConstraint("confidence BETWEEN 0 AND 1", name="ck_page_metadata_confidence"),
+    )
+
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("metadata_documents.id"), nullable=False, index=True
+    )
+    pdf_page: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-based
+    printed_page: Mapped[str] = mapped_column(String(255), nullable=False)
+    printed_page_numeric: Mapped[int | None] = mapped_column(Integer)
+    numbering_system: Mapped[str] = mapped_column(String(20), default="none", nullable=False)
+    page_number_uncertain: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    source: Mapped[str] = mapped_column(String(50), nullable=False)
+    kitab: Mapped[str | None] = mapped_column(String(255))
+    bab: Mapped[str | None] = mapped_column(String(255))
+    fasl: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    document: Mapped[MetadataDocument] = relationship(back_populates="pages")
+
+    def __repr__(self) -> str:
+        return f"<PageMetadata pdf={self.pdf_page} printed={self.printed_page!r}>"
+
+
+class MetadataStructure(UUIDPrimaryKeyMixin, Base):
+    """A detected hierarchical section (kitab/bab/fasl/topic) with its page range."""
+
+    __tablename__ = "metadata_structures"
+    __table_args__ = (
+        CheckConstraint(
+            "level IN ('kitab', 'bab', 'fasl', 'topic')", name="ck_metadata_structures_level"
+        ),
+        CheckConstraint("confidence BETWEEN 0 AND 1", name="ck_metadata_structures_confidence"),
+        Index("ix_metadata_structures_doc_level_start", "document_id", "level", "page_start"),
+    )
+
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("metadata_documents.id"), nullable=False, index=True
+    )
+    level: Mapped[str] = mapped_column(String(10), nullable=False)
+    name: Mapped[str] = mapped_column(String(500), nullable=False)
+    page_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_end: Mapped[int | None] = mapped_column(Integer)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    source: Mapped[str] = mapped_column(String(50), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    document: Mapped[MetadataDocument] = relationship(back_populates="structures")
+
+    def __repr__(self) -> str:
+        return f"<MetadataStructure {self.level}: {self.name} p.{self.page_start}>"
+
+
 class IngestionJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "ingestion_jobs"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('initial', 'reindex', 'ocr', 'extraction', 'layout')",
+            "kind IN ('initial', 'reindex', 'ocr', 'extraction', 'layout', 'metadata')",
             name="kind",
         ),
         CheckConstraint(

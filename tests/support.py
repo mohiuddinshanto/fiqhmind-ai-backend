@@ -146,6 +146,102 @@ def build_margin_pdf(path: Path, *, pages: int = 1) -> Path:
     return path
 
 
+_BODY_LINES = [
+    (72, 120, 12, "A line of ordinary body text for the metadata phase."),
+    (72, 160, 12, "Another line of ordinary body text, still main text."),
+    (72, 200, 12, "A third body line so the page has real content."),
+]
+
+_ARABIC_FONT_CANDIDATES = (
+    "C:/Windows/Fonts/segoeui.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+)
+
+
+def arabic_font_file() -> Path | None:
+    """A TrueType font that encodes Arabic-Indic digits, if any is installed."""
+    for candidate in _ARABIC_FONT_CANDIDATES:
+        if Path(candidate).exists():
+            return Path(candidate)
+    return None
+
+
+def _insert_footer(page: "fitz.Page", footer: str | None) -> None:
+    if not footer:
+        return
+    if any(char in "٠١٢٣٤٥٦٧٨٩" for char in footer):
+        font_file = arabic_font_file()
+        if font_file is not None:
+            page.insert_text(
+                (290, 815),
+                footer,
+                fontsize=10,
+                fontname="F0",
+                fontfile=str(font_file),
+            )
+            return
+    page.insert_text((290, 815), footer, fontsize=10)
+
+
+def build_numbered_pdf(path: Path, footers: list[str]) -> Path:
+    """Build a PDF whose pages carry the given footer page-number labels.
+
+    `footers` is one label per page; an empty string means "no page number".
+    """
+    doc = fitz.open()
+    for footer in footers:
+        page = doc.new_page(width=595, height=842)
+        for x, y, size, text in _BODY_LINES:
+            page.insert_text((x, y), text, fontsize=size)
+        _insert_footer(page, footer)
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+def build_mixed_numbered_pdf(path: Path) -> Path:
+    """Roman-numeral front matter followed by Latin-digit body pages."""
+    return build_numbered_pdf(path, ["i", "ii", "1", "2"])
+
+
+def build_arabic_numbered_pdf(path: Path) -> Path:
+    """A PDF whose footers are Arabic-Indic page numbers (٥, ٦, ٧)."""
+    return build_numbered_pdf(path, ["٥", "٦", "٧"])
+
+
+def build_structured_book(path: Path) -> Path:
+    """A cover page plus a Kitab → Bab body with Latin footer numbers.
+
+    Page 1 carries bibliographic cues in the text layer; pages 2-4 use
+    heading-style fonts (Kitab 18, Bab 14) above 12pt body text, with
+    page-number footers "1".."3".
+    """
+    doc = fitz.open()
+    cover = doc.new_page(width=595, height=842)
+    cover.insert_text((72, 200), "Al-Mabsut", fontsize=12)
+    cover.insert_text((72, 230), "Authored by Imam Sarakhsi", fontsize=12)
+    cover.insert_text((72, 260), "Published by Dar al-Kutub", fontsize=12)
+    cover.insert_text((72, 290), "1998", fontsize=12)
+
+    pages = [
+        (["Kitab al-Taharah"], 18, "1"),
+        (["Bab al-Wudu"], 14, "2"),
+        ([], 12, "3"),
+    ]
+    for headings, heading_size, footer in pages:
+        page = doc.new_page(width=595, height=842)
+        for x, y, size, text in _BODY_LINES:
+            page.insert_text((x, y), text, fontsize=size)
+        for index, heading in enumerate(headings):
+            page.insert_text((72, 100 + index * 40), heading, fontsize=heading_size)
+        _insert_footer(page, footer)
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
 def build_malformed_pdf(path: Path) -> Path:
     """Write bytes that cannot be opened as a PDF."""
     path.write_bytes(b"%PDF-1.4\nthis is not a real pdf body at all")

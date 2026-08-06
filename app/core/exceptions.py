@@ -70,6 +70,11 @@ class LayoutConflictError(BaseAppError):
     code = "layout_conflict"
 
 
+class MetadataConflictError(BaseAppError):
+    status_code = 409
+    code = "metadata_conflict"
+
+
 class MalformedPdfError(BaseAppError):
     status_code = 422
     code = "malformed_pdf"
