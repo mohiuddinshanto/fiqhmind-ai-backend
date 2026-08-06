@@ -75,6 +75,11 @@ class MetadataConflictError(BaseAppError):
     code = "metadata_conflict"
 
 
+class ChunkConflictError(BaseAppError):
+    status_code = 409
+    code = "chunking_conflict"
+
+
 class MalformedPdfError(BaseAppError):
     status_code = 422
     code = "malformed_pdf"

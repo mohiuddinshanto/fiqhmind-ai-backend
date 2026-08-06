@@ -21,6 +21,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import MetadataConflictError
 from app.db.models import IngestionJob, PageExtraction, Upload
 from app.db.repositories import ExtractionRepository, MetadataRepository
 from app.services.extraction import BlockInfo, PageInfo
@@ -611,7 +612,13 @@ class MetadataRunner:
     def run(self, job: IngestionJob, upload: Upload) -> MetadataResult:
         """Extract and persist metadata for `upload` under `job`."""
         self._begin(job, upload)
-        page_rows = self._extraction_repo.list_pages(job.id)
+        pipeline_job = self._pipeline_job(upload)
+        if pipeline_job is None:
+            raise MetadataConflictError(
+                "metadata extraction requires a completed extraction job "
+                "(no extracted pages found)"
+            )
+        page_rows = self._extraction_repo.list_pages(pipeline_job.id)
         pages = [self._load_page(row) for row in page_rows]
         document = extract_metadata(upload.original_filename, pages)
 
@@ -633,6 +640,11 @@ class MetadataRunner:
             numbering_system=document.numbering_system,
             confidence=document.confidence,
         )
+
+    def _pipeline_job(self, upload: Upload):
+        from app.db.repositories import IngestionJobRepository
+
+        return IngestionJobRepository(self._session).find_pipeline_job(upload.id)
 
     def _begin(self, job: IngestionJob, upload: Upload) -> None:
         job.status = "structuring"

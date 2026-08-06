@@ -221,9 +221,14 @@ class Chunk(TimestampMixin, Base):
     # chunk_id = sha256(raw_text): content-addressed, immutable (Phase 6).
     chunk_id: Mapped[str] = mapped_column(String(64), primary_key=True)
 
-    book_id: Mapped[str] = mapped_column(ForeignKey("books.id"), nullable=False, index=True)
-    edition_id: Mapped[str] = mapped_column(ForeignKey("editions.id"), nullable=False, index=True)
-    volume_id: Mapped[str] = mapped_column(ForeignKey("volumes.id"), nullable=False, index=True)
+    # The chunking job that produced this chunk (Phase 7).
+    job_id: Mapped[str | None] = mapped_column(ForeignKey("ingestion_jobs.id"), index=True)
+
+    # Corpus attachment is a later phase: chunking runs before books/volumes/
+    # pages are materialized, so these references stay nullable until then.
+    book_id: Mapped[str | None] = mapped_column(ForeignKey("books.id"), index=True)
+    edition_id: Mapped[str | None] = mapped_column(ForeignKey("editions.id"), index=True)
+    volume_id: Mapped[str | None] = mapped_column(ForeignKey("volumes.id"), index=True)
     page_start_id: Mapped[str | None] = mapped_column(ForeignKey("pages.id"), index=True)
     page_end_id: Mapped[str | None] = mapped_column(ForeignKey("pages.id"), index=True)
 
@@ -236,6 +241,8 @@ class Chunk(TimestampMixin, Base):
     bab: Mapped[str | None] = mapped_column(String(255))
     fasl: Mapped[str | None] = mapped_column(String(255))
     topic: Mapped[str | None] = mapped_column(String(255))
+    context_heading: Mapped[str | None] = mapped_column(Text)
+    order_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     region: Mapped[str] = mapped_column(String(20), default="main", nullable=False)
     lang: Mapped[str] = mapped_column(String(10), default="ar", nullable=False)
 
@@ -403,7 +410,8 @@ class IngestionJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "ingestion_jobs"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('initial', 'reindex', 'ocr', 'extraction', 'layout', 'metadata')",
+            "kind IN ('initial', 'reindex', 'ocr', 'extraction', 'layout', 'metadata', "
+            "'chunking')",
             name="kind",
         ),
         CheckConstraint(

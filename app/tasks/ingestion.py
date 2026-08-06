@@ -1,19 +1,26 @@
-"""Celery tasks for the ingestion pipeline (Phases 3 + 4 + 5 + 6).
+"""Celery tasks for the ingestion pipeline (Phases 3 + 4 + 5 + 6 + 7).
 
 Phase 3 enqueues accepted uploads (`mark_queued`). Phase 4 adds the PDF
 extraction worker (`extract_pdf_task`). Phase 5 adds the layout worker
 (`run_layout_task`). Phase 6 adds the metadata worker (`run_metadata_task`)
 which extracts bibliographic/structural metadata and the page mapping.
+Phase 7 adds the chunking worker (`run_chunking_task`) which turns that
+metadata + page mapping into structure-aware, page-anchored chunks.
 """
 
 import structlog
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import EncryptedPdfError, MalformedPdfError
+from app.core.exceptions import (
+    ChunkConflictError,
+    EncryptedPdfError,
+    MalformedPdfError,
+)
 from app.core.postgres import get_session_factory
 from app.core.storage import get_storage_provider
 from app.db.models import IngestionJob, Upload
 from app.db.repositories import IngestionJobRepository, UploadRepository
+from app.services.chunking import ChunkRunner
 from app.services.extraction import ExtractionRunner
 from app.services.layout import LayoutRunner
 from app.services.metadata import MetadataRunner
@@ -213,6 +220,65 @@ def run_metadata_task(self, job_id: str, upload_id: str) -> None:
 
 def _retry_countdown(retries: int) -> int:
     return min(2**retries * 10, 120)
+
+
+@celery_app.task(
+    name="app.tasks.ingestion.run_chunking_task",
+    bind=True,
+    max_retries=MAX_RETRIES,
+    retry_backoff=True,
+    retry_backoff_max=120,
+    retry_jitter=True,
+)
+def run_chunking_task(self, job_id: str, upload_id: str, metadata_job_id: str) -> None:
+    """Run Phase 7 structure-aware chunking on stored pages + metadata.
+
+    Chunking is deterministic and cheap; failures are almost always transient
+    (DB connection), so retries with backoff cover them. A missing metadata
+    document is a permanent failure and fails the job immediately.
+    """
+    session = get_session_factory()()
+    job = None
+    upload = None
+    try:
+        job_repo = IngestionJobRepository(session)
+        upload_repo = UploadRepository(session)
+        job = job_repo.get(job_id)
+        upload = upload_repo.get(upload_id)
+        if job is None or upload is None:
+            logger.warning("chunking_job_missing", job_id=job_id, upload_id=upload_id)
+            return
+
+        result = ChunkRunner(session).run(job, upload, metadata_job_id=metadata_job_id)
+        job_repo.update_status(job, "completed", progress_percent=100, current_step="chunking")
+        upload.status = "completed"
+        session.commit()
+        logger.info(
+            "chunking_completed",
+            job_id=job_id,
+            upload_id=upload_id,
+            page_count=result.page_count,
+            chunk_count=result.chunk_count,
+            pages_covered=result.pages_covered,
+            token_count=result.token_count,
+        )
+    except ChunkConflictError as exc:
+        session.rollback()
+        _record_error_and_fail(session, job, upload, exc.message, permanent=True, step="chunking")
+        logger.warning("chunking_permanent_failure", job_id=job_id, error=exc.message)
+    except Exception as exc:  # noqa: BLE001 - transient failures are retried
+        session.rollback()
+        if job is not None:
+            IngestionJobRepository(session).add_error(job, "chunking", str(exc))
+        if self.request.retries < MAX_RETRIES:
+            logger.warning(
+                "chunking_retrying", job_id=job_id, retry=self.request.retries + 1, error=str(exc)
+            )
+            raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+        _record_error_and_fail(session, job, upload, str(exc), step="chunking", permanent=True)
+        logger.warning("chunking_retries_exhausted", job_id=job_id, error=str(exc))
+    finally:
+        session.close()
 
 
 def _record_error_and_fail(
