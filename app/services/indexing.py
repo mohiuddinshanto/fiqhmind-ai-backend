@@ -120,10 +120,7 @@ class IndexingRunner:
         self._begin(job, upload)
 
         meta = self._payload_meta(document)
-        points = [
-            self._to_point(chunk, upload, chunking_job_id, meta)
-            for chunk in chunks
-        ]
+        points = [self._to_point(chunk, upload, chunking_job_id, meta) for chunk in chunks]
         self._store.delete_by_filter(_upload_filter(upload.id))
 
         total = len(points)
@@ -159,32 +156,23 @@ class IndexingRunner:
         chunks = self._chunk_repo.list_by_job(chunking_job_id) if chunking_job_id else []
         if not chunks:
             raise IndexConflictError(
-                "indexing requires a completed chunking job with chunks "
-                "(no chunks found)"
+                "indexing requires a completed chunking job with chunks (no chunks found)"
             )
         return chunks
 
     def _load_metadata_document(self, upload: Upload) -> MetadataDocument:
-        metadata_job = IngestionJobRepository(self._session).find_for_upload(
-            upload.id, "metadata"
-        )
+        metadata_job = IngestionJobRepository(self._session).find_for_upload(upload.id, "metadata")
         document = (
-            self._metadata_repo.get_by_job(metadata_job.id)
-            if metadata_job is not None
-            else None
+            self._metadata_repo.get_by_job(metadata_job.id) if metadata_job is not None else None
         )
         if document is None:
             raise IndexConflictError(
-                "indexing requires a completed metadata extraction "
-                "(metadata document is missing)"
+                "indexing requires a completed metadata extraction (metadata document is missing)"
             )
         return document
 
     def _payload_meta(self, document: MetadataDocument) -> dict[str, str | None]:
-        return {
-            field.field: field.value
-            for field in self._metadata_repo.list_fields(document)
-        }
+        return {field.field: field.value for field in self._metadata_repo.list_fields(document)}
 
     def _to_point(
         self,

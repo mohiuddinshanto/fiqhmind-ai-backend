@@ -61,9 +61,7 @@ def test_single_paragraph_produces_one_chunk() -> None:
 def test_chunk_id_is_sha256_of_position_and_raw_text() -> None:
     page = _page(1, [_block(0, "A single line of body text here.")])
     chunks = extract_chunks([page], _contexts([page]))
-    expected = hashlib.sha256(
-        f"{chunks[0].order_index}:{chunks[0].raw_text}".encode()
-    ).hexdigest()
+    expected = hashlib.sha256(f"{chunks[0].order_index}:{chunks[0].raw_text}".encode()).hexdigest()
     assert chunks[0].chunk_id == expected
 
 
@@ -127,8 +125,7 @@ def test_section_boundaries_split_chunks_and_prepend_context() -> None:
     assert first.bab is None
     assert first.context_heading == "Kitab: Kitab al-Taharah"
     assert first.raw_text == (
-        "Kitab: Kitab al-Taharah\n\n"
-        "Body text one with a fair amount of words to dominate."
+        "Kitab: Kitab al-Taharah\n\nBody text one with a fair amount of words to dominate."
     )
     assert first.pdf_page_start == 1
 

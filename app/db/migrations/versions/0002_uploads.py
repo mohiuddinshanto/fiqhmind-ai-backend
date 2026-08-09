@@ -5,6 +5,7 @@ Revises: 0001_initial
 Create Date: 2026-08-06
 
 """
+
 # ruff: noqa: E501  (migration DDL rows are intentionally long)
 from collections.abc import Sequence
 
@@ -39,8 +40,12 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=20), nullable=False),
         sa.Column("received_bytes", sa.Integer(), nullable=False),
         sa.Column("error_message", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
         sa.CheckConstraint(
             "status IN ('uploading', 'uploaded', 'queued', 'processing', 'completed', 'failed')",
             name="ck_uploads_status",
@@ -57,8 +62,12 @@ def upgrade() -> None:
         sa.Column("event", sa.String(length=50), nullable=False),
         sa.Column("message", sa.Text(), nullable=True),
         sa.Column("details", sa.JSON(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.ForeignKeyConstraint(["upload_id"], ["uploads.id"], name="fk_upload_logs_upload_id_uploads"),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.ForeignKeyConstraint(
+            ["upload_id"], ["uploads.id"], name="fk_upload_logs_upload_id_uploads"
+        ),
         sa.PrimaryKeyConstraint("id", name="pk_upload_logs"),
     )
     op.create_index("ix_upload_logs_upload_id", "upload_logs", ["upload_id"])

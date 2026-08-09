@@ -64,9 +64,7 @@ class TermRelationRepository(RepositoryBase[TermRelation]):
             )
         )
 
-    def delete_edge(
-        self, *, primary_term: str, related_term: str, relation_type: str
-    ) -> bool:
+    def delete_edge(self, *, primary_term: str, related_term: str, relation_type: str) -> bool:
         """Delete one directed edge; returns True when a row was removed."""
         existing = self._session.scalar(
             select(TermRelation).where(

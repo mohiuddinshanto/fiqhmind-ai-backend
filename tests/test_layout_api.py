@@ -128,7 +128,10 @@ def test_start_layout_queues_job(
 
 
 def test_start_layout_dispatches_worker(
-    client: TestClient, session: Session, storage: LocalStorageProvider, tmp_path,
+    client: TestClient,
+    session: Session,
+    storage: LocalStorageProvider,
+    tmp_path,
     _no_celery: FakeTask,
 ) -> None:
     pdf = build_header_footer_pdf(tmp_path / "hf.pdf")

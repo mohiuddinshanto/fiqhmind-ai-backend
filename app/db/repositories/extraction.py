@@ -33,9 +33,9 @@ class ExtractionRepository(RepositoryBase[PageExtraction]):
     def count_pages(self, job_id: str) -> int:
         return int(
             self._session.scalar(
-                select(func.count()).select_from(PageExtraction).where(
-                    PageExtraction.job_id == job_id
-                )
+                select(func.count())
+                .select_from(PageExtraction)
+                .where(PageExtraction.job_id == job_id)
             )
             or 0
         )

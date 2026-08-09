@@ -34,23 +34,15 @@ class LanguageDetector(Protocol):
 
 
 def _is_arabic(ch: str) -> bool:
-    return (
-        "\u0600" <= ch <= "\u06FF"
-        or "\u0750" <= ch <= "\u077F"
-        or "\u08A0" <= ch <= "\u08FF"
-    )
+    return "\u0600" <= ch <= "\u06ff" or "\u0750" <= ch <= "\u077f" or "\u08a0" <= ch <= "\u08ff"
 
 
 def _is_bengali(ch: str) -> bool:
-    return "\u0980" <= ch <= "\u09FF"
+    return "\u0980" <= ch <= "\u09ff"
 
 
 def _is_latin(ch: str) -> bool:
-    return (
-        "A" <= ch <= "Z"
-        or "a" <= ch <= "z"
-        or "\u00C0" <= ch <= "\u00FF"
-    )
+    return "A" <= ch <= "Z" or "a" <= ch <= "z" or "\u00c0" <= ch <= "\u00ff"
 
 
 def has_arabic_script(text: str) -> bool:
@@ -91,9 +83,7 @@ def get_language_detector(settings: Settings | None = None) -> LanguageDetector:
             "the fastText LID-176 language head is an external model; "
             "use language_detector_provider=heuristic until it lands"
         )
-    raise ValueError(
-        f"unknown language_detector_provider: {resolved.language_detector_provider}"
-    )
+    raise ValueError(f"unknown language_detector_provider: {resolved.language_detector_provider}")
 
 
 def require_language(text: str, detector: LanguageDetector) -> Language:

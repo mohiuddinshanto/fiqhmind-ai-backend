@@ -5,6 +5,7 @@ Revises: 0006_chunking
 Create Date: 2026-08-06
 
 """
+
 # ruff: noqa: E501  (migration DDL rows are intentionally long)
 from collections.abc import Sequence
 

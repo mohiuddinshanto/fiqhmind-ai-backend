@@ -5,6 +5,7 @@ Revises: 0003_extraction
 Create Date: 2026-08-06
 
 """
+
 # ruff: noqa: E501  (migration DDL rows are intentionally long)
 from collections.abc import Sequence
 
@@ -16,9 +17,7 @@ down_revision: str | None = "0003_extraction"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_PAGE_BLOCK_REGIONS = (
-    "region IN ('main', 'footnote', 'margin', 'header', 'footer', 'unknown')"
-)
+_PAGE_BLOCK_REGIONS = "region IN ('main', 'footnote', 'margin', 'header', 'footer', 'unknown')"
 
 
 def upgrade() -> None:
@@ -29,9 +28,7 @@ def upgrade() -> None:
         batch_op.add_column(
             sa.Column("reading_order", sa.Integer(), nullable=False, server_default="0")
         )
-        batch_op.add_column(
-            sa.Column("confidence", sa.Float(), nullable=False, server_default="0")
-        )
+        batch_op.add_column(sa.Column("confidence", sa.Float(), nullable=False, server_default="0"))
         batch_op.add_column(
             sa.Column("classification_reason", sa.String(length=500), nullable=True)
         )

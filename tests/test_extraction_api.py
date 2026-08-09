@@ -91,8 +91,14 @@ def _upload_pdf(client: TestClient, data: bytes, name: str = "kitab.pdf") -> str
     return response.json()["id"]
 
 
-def _run_extraction(client: TestClient, session: Session, storage: LocalStorageProvider,
-                    upload_id: str, *, complete: bool = True) -> IngestionJob:
+def _run_extraction(
+    client: TestClient,
+    session: Session,
+    storage: LocalStorageProvider,
+    upload_id: str,
+    *,
+    complete: bool = True,
+) -> IngestionJob:
     upload = UploadRepository(session).get(upload_id)
     job = upload.ingestion_job
     assert job is not None
@@ -107,9 +113,7 @@ def _run_extraction(client: TestClient, session: Session, storage: LocalStorageP
     return IngestionJobRepository(session).get(job.id)
 
 
-def test_start_extraction_queues_job(
-    client: TestClient, session: Session, tmp_path
-) -> None:
+def test_start_extraction_queues_job(client: TestClient, session: Session, tmp_path) -> None:
     pdf = build_text_pdf(tmp_path / "text.pdf")
     upload_id = _upload_pdf(client, pdf.read_bytes())
 
@@ -216,9 +220,7 @@ def test_get_extraction_status_scanned_pdf_has_no_text_layer(
     assert body["image_count"] == 1
 
 
-def test_get_extraction_status_lists_errors(
-    client: TestClient, session: Session, tmp_path
-) -> None:
+def test_get_extraction_status_lists_errors(client: TestClient, session: Session, tmp_path) -> None:
     pdf = build_text_pdf(tmp_path / "text.pdf")
     upload_id = _upload_pdf(client, pdf.read_bytes())
     job = UploadRepository(session).get(upload_id).ingestion_job

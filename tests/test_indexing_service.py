@@ -144,9 +144,7 @@ def test_runner_indexes_every_chunk_with_contract_payload(
     index_job = _index_job(session, upload)
     store = FakeStore()
 
-    result = IndexingRunner(session, store).run(
-        index_job, upload, chunking_job_id=chunk_job.id
-    )
+    result = IndexingRunner(session, store).run(index_job, upload, chunking_job_id=chunk_job.id)
     session.expire_all()
 
     assert result.page_count == 4
@@ -302,9 +300,11 @@ def test_indexing_task_records_error_and_fails_job(
 
     factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False)
     monkeypatch.setattr(ingestion_module, "get_session_factory", lambda: factory)
-    monkeypatch.setattr(ingestion_module, "IndexingRunner", lambda _session, _store: type(
-        "Broken", (), {"run": boom}
-    )())
+    monkeypatch.setattr(
+        ingestion_module,
+        "IndexingRunner",
+        lambda _session, _store: type("Broken", (), {"run": boom})(),
+    )
 
     celery_app.conf.task_always_eager = True
     try:

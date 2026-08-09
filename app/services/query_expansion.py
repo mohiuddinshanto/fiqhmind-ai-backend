@@ -109,9 +109,7 @@ class ExpansionRunner:
                 _add(variant, "kg")
 
         if self._settings.retrieval_llm_expansion_enabled:
-            for paraphrase in self._paraphraser.paraphrase(
-                canonical_arabic, limit=max_variants
-            ):
+            for paraphrase in self._paraphraser.paraphrase(canonical_arabic, limit=max_variants):
                 _add(paraphrase, "llm")
 
         return ExpandedQuery(
@@ -141,9 +139,7 @@ class ExpansionRunner:
         for probe in self._probe_terms(canonical):
             edges = self._term_repo.related_terms(probe)
             for edge in edges:
-                neighbor = (
-                    edge.related_term if edge.primary_term == probe else edge.primary_term
-                )
+                neighbor = edge.related_term if edge.primary_term == probe else edge.primary_term
                 if neighbor in seen_neighbors:
                     continue
                 seen_neighbors.add(neighbor)

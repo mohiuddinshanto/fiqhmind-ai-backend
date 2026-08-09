@@ -42,9 +42,7 @@ class CacheService:
             deleted += cast(int, self._redis.delete(key))
         return deleted
 
-    def get_or_set(
-        self, key: str, *, ttl_seconds: int, loader: Any
-    ) -> Any:
+    def get_or_set(self, key: str, *, ttl_seconds: int, loader: Any) -> Any:
         cached = self.get(key)
         if cached is not None:
             return cached

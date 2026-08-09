@@ -59,9 +59,7 @@ def start_metadata(upload_id: str, session: DbSession) -> MetadataStartResponse:
         )
 
     if job is None:
-        job = job_repo.create(
-            IngestionJob(upload_id=upload_id, kind="metadata", status="queued")
-        )
+        job = job_repo.create(IngestionJob(upload_id=upload_id, kind="metadata", status="queued"))
     else:
         job.status = "queued"
         job.progress_percent = 0

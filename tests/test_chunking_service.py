@@ -90,9 +90,7 @@ def test_runner_persists_structure_aware_chunks(
     upload, extraction_job, metadata_job = _extract_and_metadata(session, storage, pdf)
     chunk_job = _create_chunking_job(session, upload)
 
-    result = ChunkRunner(session).run(
-        chunk_job, upload, metadata_job_id=metadata_job.id
-    )
+    result = ChunkRunner(session).run(chunk_job, upload, metadata_job_id=metadata_job.id)
     session.expire_all()
 
     assert result.page_count == 4
@@ -198,9 +196,7 @@ def test_chunking_task_completes_job_and_upload(
 
     celery_app.conf.task_always_eager = True
     try:
-        ingestion_module.run_chunking_task.delay(
-            chunk_job.id, upload.id, metadata_job.id
-        )
+        ingestion_module.run_chunking_task.delay(chunk_job.id, upload.id, metadata_job.id)
     finally:
         celery_app.conf.task_always_eager = False
 
@@ -227,15 +223,13 @@ def test_chunking_task_records_error_and_fails_job(
 
     factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False)
     monkeypatch.setattr(ingestion_module, "get_session_factory", lambda: factory)
-    monkeypatch.setattr(ingestion_module, "ChunkRunner", lambda _session: type(
-        "Broken", (), {"run": boom}
-    )())
+    monkeypatch.setattr(
+        ingestion_module, "ChunkRunner", lambda _session: type("Broken", (), {"run": boom})()
+    )
 
     celery_app.conf.task_always_eager = True
     try:
-        ingestion_module.run_chunking_task.delay(
-            chunk_job.id, upload.id, metadata_job.id
-        )
+        ingestion_module.run_chunking_task.delay(chunk_job.id, upload.id, metadata_job.id)
     finally:
         celery_app.conf.task_always_eager = False
 

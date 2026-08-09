@@ -9,9 +9,7 @@ from app.services.translation import (
 
 
 def test_passthrough_returns_input_unchanged() -> None:
-    result = PassthroughTranslator().translate(
-        "What is the rule of wudu?", source_lang="en"
-    )
+    result = PassthroughTranslator().translate("What is the rule of wudu?", source_lang="en")
 
     assert isinstance(result, TranslationResult)
     assert result.text == "What is the rule of wudu?"

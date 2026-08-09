@@ -159,10 +159,6 @@ class HybridSearchService:
             indices=embedding.sparse.indices,
             values=embedding.sparse.values,
         )
-        dense_hits = self._store.search_dense(
-            embedding.dense, limit=limit, filter_=query_filter
-        )
-        sparse_hits = self._store.search_sparse(
-            sparse, limit=limit, filter_=query_filter
-        )
+        dense_hits = self._store.search_dense(embedding.dense, limit=limit, filter_=query_filter)
+        sparse_hits = self._store.search_sparse(sparse, limit=limit, filter_=query_filter)
         return rrf_fuse(dense_hits, sparse_hits, k=self._k, alpha=alpha, limit=limit)

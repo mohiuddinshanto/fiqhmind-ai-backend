@@ -62,6 +62,33 @@ class Settings(BaseSettings):
     retrieval_reranking_enabled: bool = True
     query_max_length: int = 500
 
+    # LLM answer generation (Phase 10). External models sit behind a common
+    # provider port (ARCHITECTURE §Phase 10 "Provider ports"); `deterministic`
+    # is the dependency-free adapter that synthesizes a grounded answer from the
+    # retrieved evidence with no external call, so the chat pipeline keeps
+    # working when no provider key is configured.
+    generator_provider: str = "deterministic"  # deterministic | gemini | groq | openrouter
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-flash"
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.3-70b-versatile"
+    # OpenRouter is the rotating third fallback rung only, never a primary
+    # dependency (ARCHITECTURE §Phase 11). When set, a free-preview model is
+    # selected and rotated automatically.
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
+    # Fallback chain order. `generator_provider` is tried first; remaining
+    # providers are tried in this order as they become unhealthy/unavailable.
+    provider_fallback_order: str = "gemini,groq,openrouter"
+    # Context cap for evidence injected into prompts (ARCHITECTURE: 5-7 chunks).
+    generation_max_chunks: int = 7
+    # Number of regenerate attempts after a validation failure (validate → fail → retry once).
+    generation_retries: int = 1
+    # Outbound provider request timeout in seconds.
+    generation_request_timeout_seconds: float = 60.0
+    # Target first-delta latency budget reported in the SSE `meta` event.
+    generation_latency_budget_ms: int = 3000
+
     # Rate limiting defaults (per Phase 14)
     rate_limit_chat_per_min: int = 20
     rate_limit_search_per_min: int = 60

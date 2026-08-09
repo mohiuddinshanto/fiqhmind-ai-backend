@@ -94,9 +94,7 @@ def client(session: Session, monkeypatch) -> TestClient:
 
 
 def test_search_returns_evidence(client: TestClient) -> None:
-    response = client.post(
-        "/api/v1/retrieval/search", json={"query": "ما حكم الوضوء"}
-    )
+    response = client.post("/api/v1/retrieval/search", json={"query": "ما حكم الوضوء"})
 
     assert response.status_code == 200
     body = response.json()

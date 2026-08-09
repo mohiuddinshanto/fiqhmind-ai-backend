@@ -113,3 +113,13 @@ class EncryptedPdfError(BaseAppError):
 class TransientExtractionError(BaseAppError):
     status_code = 500
     code = "extraction_retry"
+
+
+class GenerationError(BaseAppError):
+    status_code = 502
+    code = "generation_error"
+
+
+class ProviderUnavailableError(BaseAppError):
+    status_code = 502
+    code = "provider_unavailable"

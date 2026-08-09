@@ -50,9 +50,7 @@ def test_user_repository_crud(session: Session) -> None:
     session.add(role)
     session.commit()
 
-    user = repo.create(
-        User(email="reader@fiqhmind.test", password_hash="hash", role_id=role.id)
-    )
+    user = repo.create(User(email="reader@fiqhmind.test", password_hash="hash", role_id=role.id))
     assert repo.get(user.id) == user
     assert repo.get_by_email("reader@fiqhmind.test") is user
     assert repo.get_by_email("missing@fiqhmind.test") is None

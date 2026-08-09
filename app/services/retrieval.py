@@ -153,9 +153,7 @@ class RetrievalRunner:
         limit = max(int(self._settings.retrieval_candidates), 1)
         best: dict[str, SearchHit] = {}
         for candidate in expanded.candidates:
-            hits = self._hybrid.search(
-                candidate.text, limit=limit, filters=filters
-            )
+            hits = self._hybrid.search(candidate.text, limit=limit, filters=filters)
             for hit in hits:
                 existing = best.get(hit.chunk_id)
                 if existing is None or hit.score > existing.score:

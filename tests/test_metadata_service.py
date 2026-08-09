@@ -266,9 +266,9 @@ def test_metadata_task_records_error_and_fails_job(
 
     factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False)
     monkeypatch.setattr(ingestion_module, "get_session_factory", lambda: factory)
-    monkeypatch.setattr(ingestion_module, "MetadataRunner", lambda _session: type(
-        "Broken", (), {"run": boom}
-    )())
+    monkeypatch.setattr(
+        ingestion_module, "MetadataRunner", lambda _session: type("Broken", (), {"run": boom})()
+    )
 
     celery_app.conf.task_always_eager = True
     try:

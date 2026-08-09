@@ -275,9 +275,7 @@ def _split_range(
         return [(start, end)]
     if sub_levels:
         next_level = sub_levels[0]
-        heading_starts = [
-            index for index in range(start, end) if units[index].level == next_level
-        ]
+        heading_starts = [index for index in range(start, end) if units[index].level == next_level]
         if heading_starts:
             pieces: list[tuple[int, int]] = []
             for sub_start, sub_end in _ranges(heading_starts, end, start=start):
@@ -499,8 +497,7 @@ class ChunkRunner:
         document = self._metadata_repo.get_by_job(metadata_job_id) if metadata_job_id else None
         if document is None:
             raise ChunkConflictError(
-                "chunking requires a completed metadata extraction "
-                "(metadata document is missing)"
+                "chunking requires a completed metadata extraction (metadata document is missing)"
             )
         return document
 
@@ -511,8 +508,7 @@ class ChunkRunner:
         pipeline_job = IngestionJobRepository(self._session).find_pipeline_job(upload.id)
         if pipeline_job is None:
             raise ChunkConflictError(
-                "chunking requires a completed extraction job "
-                "(no extracted pages found)"
+                "chunking requires a completed extraction job (no extracted pages found)"
             )
         return self._extraction_repo.list_pages(pipeline_job.id)
 

@@ -45,9 +45,7 @@ class DefaultReranker:
             if not text_tokens:
                 scores.append(0.0)
                 continue
-            scores.append(
-                len(query_tokens & text_tokens) / len(query_tokens | text_tokens)
-            )
+            scores.append(len(query_tokens & text_tokens) / len(query_tokens | text_tokens))
         return scores
 
 

@@ -90,7 +90,7 @@ def get_layout_status(job_id: str, session: DbSession) -> LayoutStatusResponse:
     repo = ExtractionRepository(session)
     summary = repo.job_summary(job_id)
     upload = UploadRepository(session).get(job.upload_id) if job.upload_id else None
-    total_pages = (upload.page_count if upload and upload.page_count else summary["page_count"])
+    total_pages = upload.page_count if upload and upload.page_count else summary["page_count"]
     errors = sorted(job.errors, key=lambda item: item.created_at, reverse=True)[:5]
 
     return LayoutStatusResponse(

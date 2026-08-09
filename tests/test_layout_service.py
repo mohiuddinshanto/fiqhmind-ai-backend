@@ -150,9 +150,7 @@ def test_runner_handles_double_column(
     assert sorted(orders) == list(range(8))
     left = [block for block in blocks if block.bbox[0] < 200]
     right = [block for block in blocks if block.bbox[0] >= 200]
-    assert max(block.reading_order for block in left) < min(
-        block.reading_order for block in right
-    )
+    assert max(block.reading_order for block in left) < min(block.reading_order for block in right)
 
 
 def test_runner_updates_job_progress_to_completion(
@@ -205,9 +203,9 @@ def test_layout_task_records_error_and_fails_job(
 
     factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False)
     monkeypatch.setattr(ingestion_module, "get_session_factory", lambda: factory)
-    monkeypatch.setattr(ingestion_module, "LayoutRunner", lambda _session: type(
-        "Broken", (), {"run": boom}
-    )())
+    monkeypatch.setattr(
+        ingestion_module, "LayoutRunner", lambda _session: type("Broken", (), {"run": boom})()
+    )
 
     celery_app.conf.task_always_eager = True
     try:

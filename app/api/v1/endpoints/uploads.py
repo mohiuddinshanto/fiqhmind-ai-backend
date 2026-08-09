@@ -89,9 +89,7 @@ def create_upload(
         assert item.upload is not None
         return item.upload
 
-    response.status_code = (
-        status.HTTP_201_CREATED if not failures else status.HTTP_200_OK
-    )
+    response.status_code = status.HTTP_201_CREATED if not failures else status.HTTP_200_OK
     return UploadBatchResponse(results=results)
 
 
@@ -120,9 +118,7 @@ def get_upload(upload_id: str, session: DbSession) -> UploadDetailResponse:
         raise NotFoundError("upload not found")
     detail = UploadDetailResponse.model_validate(upload)
     detail.logs = [UploadLogResponse.model_validate(log) for log in upload.logs]
-    detail.ingestion_job_id = (
-        upload.ingestion_job.id if upload.ingestion_job is not None else None
-    )
+    detail.ingestion_job_id = upload.ingestion_job.id if upload.ingestion_job is not None else None
     return detail
 
 

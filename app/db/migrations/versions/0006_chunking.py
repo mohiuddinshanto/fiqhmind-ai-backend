@@ -5,6 +5,7 @@ Revises: 0005_metadata
 Create Date: 2026-08-06
 
 """
+
 # ruff: noqa: E501  (migration DDL rows are intentionally long)
 from collections.abc import Sequence
 
@@ -16,9 +17,7 @@ down_revision: str | None = "0005_metadata"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_ORPHAN_KIND_CHECK = (
-    "kind IN ('initial', 'reindex', 'ocr', 'extraction', 'layout', 'metadata')"
-)
+_ORPHAN_KIND_CHECK = "kind IN ('initial', 'reindex', 'ocr', 'extraction', 'layout', 'metadata')"
 _CHUNKING_KIND_CHECK = (
     "kind IN ('initial', 'reindex', 'ocr', 'extraction', 'layout', 'metadata', 'chunking')"
 )
@@ -33,15 +32,9 @@ def upgrade() -> None:
         )
         # Corpus attachment is a later phase: chunks are written before
         # books/volumes/pages are materialized, so these refs become nullable.
-        batch_op.alter_column(
-            "book_id", existing_type=sa.String(length=32), nullable=True
-        )
-        batch_op.alter_column(
-            "edition_id", existing_type=sa.String(length=32), nullable=True
-        )
-        batch_op.alter_column(
-            "volume_id", existing_type=sa.String(length=32), nullable=True
-        )
+        batch_op.alter_column("book_id", existing_type=sa.String(length=32), nullable=True)
+        batch_op.alter_column("edition_id", existing_type=sa.String(length=32), nullable=True)
+        batch_op.alter_column("volume_id", existing_type=sa.String(length=32), nullable=True)
         batch_op.create_foreign_key(
             "fk_chunks_job_id_ingestion_jobs", "ingestion_jobs", ["job_id"], ["id"]
         )
@@ -60,15 +53,9 @@ def downgrade() -> None:
     with op.batch_alter_table("chunks") as batch_op:
         batch_op.drop_index("ix_chunks_job_id")
         batch_op.drop_constraint("fk_chunks_job_id_ingestion_jobs", type_="foreignkey")
-        batch_op.alter_column(
-            "volume_id", existing_type=sa.String(length=32), nullable=False
-        )
-        batch_op.alter_column(
-            "edition_id", existing_type=sa.String(length=32), nullable=False
-        )
-        batch_op.alter_column(
-            "book_id", existing_type=sa.String(length=32), nullable=False
-        )
+        batch_op.alter_column("volume_id", existing_type=sa.String(length=32), nullable=False)
+        batch_op.alter_column("edition_id", existing_type=sa.String(length=32), nullable=False)
+        batch_op.alter_column("book_id", existing_type=sa.String(length=32), nullable=False)
         batch_op.drop_column("order_index")
         batch_op.drop_column("context_heading")
         batch_op.drop_column("job_id")

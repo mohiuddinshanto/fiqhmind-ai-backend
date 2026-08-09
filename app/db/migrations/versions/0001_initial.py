@@ -5,6 +5,7 @@ Revises:
 Create Date: 2026-08-05
 
 """
+
 # ruff: noqa: E501  (migration DDL rows are intentionally long)
 from collections.abc import Sequence
 
@@ -25,8 +26,12 @@ def upgrade() -> None:
         sa.Column("id", sa.String(length=32), nullable=False),
         sa.Column("name", sa.String(length=50), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
         sa.PrimaryKeyConstraint("id", name="pk_roles"),
     )
     op.create_index("ix_roles_name", "roles", ["name"], unique=True)
@@ -39,8 +44,12 @@ def upgrade() -> None:
         sa.Column("full_name", sa.String(length=255), nullable=True),
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("role_id", sa.String(length=32), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
         sa.ForeignKeyConstraint(["role_id"], ["roles.id"], name="fk_users_role_id_roles"),
         sa.PrimaryKeyConstraint("id", name="pk_users"),
     )
@@ -56,8 +65,12 @@ def upgrade() -> None:
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("ip_address", sa.String(length=45), nullable=True),
         sa.Column("user_agent", sa.String(length=255), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], name="fk_sessions_user_id_users"),
         sa.PrimaryKeyConstraint("id", name="pk_sessions"),
     )
@@ -73,8 +86,12 @@ def upgrade() -> None:
         sa.Column("language", sa.String(length=10), nullable=False),
         sa.Column("status", sa.String(length=20), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
         sa.CheckConstraint(
             "status IN ('draft', 'publishing', 'published')",
             name="ck_books_status",
@@ -94,8 +111,12 @@ def upgrade() -> None:
         sa.Column("edition_number", sa.Integer(), nullable=False),
         sa.Column("isbn", sa.String(length=32), nullable=True),
         sa.Column("language", sa.String(length=10), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
         sa.ForeignKeyConstraint(["book_id"], ["books.id"], name="fk_editions_book_id_books"),
         sa.PrimaryKeyConstraint("id", name="pk_editions"),
         sa.UniqueConstraint("book_id", "edition_number", name="uq_editions_book_number"),
@@ -111,9 +132,15 @@ def upgrade() -> None:
         sa.Column("title", sa.String(length=255), nullable=True),
         sa.Column("printed_page_start", sa.Integer(), nullable=True),
         sa.Column("printed_page_end", sa.Integer(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.ForeignKeyConstraint(["edition_id"], ["editions.id"], name="fk_volumes_edition_id_editions"),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.ForeignKeyConstraint(
+            ["edition_id"], ["editions.id"], name="fk_volumes_edition_id_editions"
+        ),
         sa.PrimaryKeyConstraint("id", name="pk_volumes"),
         sa.UniqueConstraint("edition_id", "volume_number", name="uq_volumes_edition_number"),
     )
@@ -129,8 +156,12 @@ def upgrade() -> None:
         sa.Column("confidence", sa.Float(), nullable=True),
         sa.Column("page_number_uncertain", sa.Boolean(), nullable=False),
         sa.Column("status", sa.String(length=20), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
         sa.CheckConstraint(
             "status IN ('pending', 'extracted', 'review', 'verified')",
             name="ck_pages_status",
@@ -164,16 +195,24 @@ def upgrade() -> None:
         sa.Column("token_count", sa.Integer(), nullable=False),
         sa.Column("verified", sa.Boolean(), nullable=False),
         sa.Column("needs_review", sa.Boolean(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
         sa.CheckConstraint(
             "region IN ('main', 'footnote', 'margin', 'header', 'footer')",
             name="ck_chunks_region",
         ),
         sa.ForeignKeyConstraint(["book_id"], ["books.id"], name="fk_chunks_book_id_books"),
-        sa.ForeignKeyConstraint(["edition_id"], ["editions.id"], name="fk_chunks_edition_id_editions"),
+        sa.ForeignKeyConstraint(
+            ["edition_id"], ["editions.id"], name="fk_chunks_edition_id_editions"
+        ),
         sa.ForeignKeyConstraint(["page_end_id"], ["pages.id"], name="fk_chunks_page_end_id_pages"),
-        sa.ForeignKeyConstraint(["page_start_id"], ["pages.id"], name="fk_chunks_page_start_id_pages"),
+        sa.ForeignKeyConstraint(
+            ["page_start_id"], ["pages.id"], name="fk_chunks_page_start_id_pages"
+        ),
         sa.ForeignKeyConstraint(["volume_id"], ["volumes.id"], name="fk_chunks_volume_id_volumes"),
         sa.PrimaryKeyConstraint("chunk_id", name="pk_chunks"),
     )
@@ -195,15 +234,21 @@ def upgrade() -> None:
         sa.Column("error_message", sa.Text(), nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
         sa.CheckConstraint("kind IN ('initial', 'reindex', 'ocr')", name="ck_ingestion_jobs_kind"),
         sa.CheckConstraint(
             "status IN ('uploaded', 'sanitizing', 'extracting', 'ocr', 'ocr_correcting', "
             "'structuring', 'chunking', 'embedding', 'indexed', 'failed')",
             name="ck_ingestion_jobs_status",
         ),
-        sa.CheckConstraint("progress_percent BETWEEN 0 AND 100", name="ck_ingestion_jobs_progress_range"),
+        sa.CheckConstraint(
+            "progress_percent BETWEEN 0 AND 100", name="ck_ingestion_jobs_progress_range"
+        ),
         sa.ForeignKeyConstraint(["book_id"], ["books.id"], name="fk_ingestion_jobs_book_id_books"),
         sa.PrimaryKeyConstraint("id", name="pk_ingestion_jobs"),
     )
@@ -217,8 +262,12 @@ def upgrade() -> None:
         sa.Column("step", sa.String(length=50), nullable=False),
         sa.Column("message", sa.Text(), nullable=False),
         sa.Column("details", sa.JSON(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.ForeignKeyConstraint(["job_id"], ["ingestion_jobs.id"], name="fk_ingestion_errors_job_id_ingestion_jobs"),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.ForeignKeyConstraint(
+            ["job_id"], ["ingestion_jobs.id"], name="fk_ingestion_errors_job_id_ingestion_jobs"
+        ),
         sa.PrimaryKeyConstraint("id", name="pk_ingestion_errors"),
     )
     op.create_index("ix_ingestion_errors_job_id", "ingestion_errors", ["job_id"])
@@ -231,9 +280,15 @@ def upgrade() -> None:
         sa.Column("title", sa.String(length=255), nullable=True),
         sa.Column("topic", sa.String(length=255), nullable=True),
         sa.Column("note", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.ForeignKeyConstraint(["chunk_id"], ["chunks.chunk_id"], name="fk_bookmarks_chunk_id_chunks"),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.ForeignKeyConstraint(
+            ["chunk_id"], ["chunks.chunk_id"], name="fk_bookmarks_chunk_id_chunks"
+        ),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], name="fk_bookmarks_user_id_users"),
         sa.PrimaryKeyConstraint("id", name="pk_bookmarks"),
         sa.UniqueConstraint("user_id", "chunk_id", name="uq_bookmarks_user_chunk"),
@@ -251,7 +306,9 @@ def upgrade() -> None:
         sa.Column("sources", sa.JSON(), nullable=True),
         sa.Column("confidence", sa.String(length=10), nullable=True),
         sa.Column("refusal", sa.String(length=50), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], name="fk_chat_history_user_id_users"),
         sa.PrimaryKeyConstraint("id", name="pk_chat_history"),
     )
@@ -267,7 +324,9 @@ def upgrade() -> None:
         sa.Column("resource_id", sa.String(length=64), nullable=True),
         sa.Column("details", sa.JSON(), nullable=True),
         sa.Column("ip_address", sa.String(length=45), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], name="fk_audit_log_user_id_users"),
         sa.PrimaryKeyConstraint("id", name="pk_audit_log"),
     )

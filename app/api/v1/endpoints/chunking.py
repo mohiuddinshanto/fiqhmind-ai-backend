@@ -71,9 +71,7 @@ def start_chunking(upload_id: str, session: DbSession) -> ChunkStartResponse:
         raise ChunkConflictError(f"chunking already in progress (job status: {job.status})")
 
     if job is None:
-        job = job_repo.create(
-            IngestionJob(upload_id=upload_id, kind="chunking", status="queued")
-        )
+        job = job_repo.create(IngestionJob(upload_id=upload_id, kind="chunking", status="queued"))
     else:
         job.status = "queued"
         job.progress_percent = 0

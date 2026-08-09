@@ -8,9 +8,7 @@ class BookRepository(RepositoryBase[Book]):
     model = Book
 
     def get_by_title_author(self, title: str, author: str) -> Book | None:
-        return self._session.scalar(
-            select(Book).where(Book.title == title, Book.author == author)
-        )
+        return self._session.scalar(select(Book).where(Book.title == title, Book.author == author))
 
     def list_public(self, *, skip: int = 0, limit: int = 100) -> list[Book]:
         return list(

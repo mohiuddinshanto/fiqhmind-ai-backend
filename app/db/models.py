@@ -23,9 +23,7 @@ from app.db.base import Base
 class UUIDPrimaryKeyMixin:
     """Primary key of 32-char lowercase hex UUID (ADR: string UUIDs)."""
 
-    id: Mapped[str] = mapped_column(
-        String(32), primary_key=True, default=lambda: uuid.uuid4().hex
-    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: uuid.uuid4().hex)
 
 
 class TimestampMixin:
@@ -277,19 +275,13 @@ class MetadataDocument(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """
 
     __tablename__ = "metadata_documents"
-    __table_args__ = (
-        UniqueConstraint("job_id", name="uq_metadata_documents_job"),
-    )
+    __table_args__ = (UniqueConstraint("job_id", name="uq_metadata_documents_job"),)
 
-    job_id: Mapped[str] = mapped_column(
-        ForeignKey("ingestion_jobs.id"), nullable=False, index=True
-    )
+    job_id: Mapped[str] = mapped_column(ForeignKey("ingestion_jobs.id"), nullable=False, index=True)
     upload_id: Mapped[str] = mapped_column(ForeignKey("uploads.id"), nullable=False, index=True)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     page_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    numbering_system: Mapped[str] = mapped_column(
-        String(20), default="none", nullable=False
-    )
+    numbering_system: Mapped[str] = mapped_column(String(20), default="none", nullable=False)
     confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
     fields: Mapped[list["MetadataField"]] = relationship(
@@ -528,9 +520,7 @@ class PageExtraction(UUIDPrimaryKeyMixin, Base):
         UniqueConstraint("job_id", "page_number", name="uq_page_extractions_job_page"),
     )
 
-    job_id: Mapped[str] = mapped_column(
-        ForeignKey("ingestion_jobs.id"), nullable=False, index=True
-    )
+    job_id: Mapped[str] = mapped_column(ForeignKey("ingestion_jobs.id"), nullable=False, index=True)
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-based
     width: Mapped[float] = mapped_column(Float, nullable=False)
     height: Mapped[float] = mapped_column(Float, nullable=False)
@@ -600,9 +590,7 @@ class PageSpan(UUIDPrimaryKeyMixin, Base):
     """A single span (same font+size run) inside a block, with its own bbox."""
 
     __tablename__ = "page_spans"
-    __table_args__ = (
-        UniqueConstraint("block_id", "span_index", name="uq_page_spans_block_index"),
-    )
+    __table_args__ = (UniqueConstraint("block_id", "span_index", name="uq_page_spans_block_index"),)
 
     block_id: Mapped[str] = mapped_column(ForeignKey("page_blocks.id"), nullable=False, index=True)
     span_index: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -665,9 +653,7 @@ class PageDrawing(UUIDPrimaryKeyMixin, Base):
 
 class Bookmark(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "bookmarks"
-    __table_args__ = (
-        UniqueConstraint("user_id", "chunk_id", name="uq_bookmarks_user_chunk"),
-    )
+    __table_args__ = (UniqueConstraint("user_id", "chunk_id", name="uq_bookmarks_user_chunk"),)
 
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     chunk_id: Mapped[str] = mapped_column(ForeignKey("chunks.chunk_id"), nullable=False)
@@ -722,22 +708,17 @@ class TermRelation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="uq_term_relations_edge",
         ),
         CheckConstraint(
-            "relation_type IN ('synonym', 'antonym', 'hyponym', 'broader', "
-            "'narrower', 'related')",
+            "relation_type IN ('synonym', 'antonym', 'hyponym', 'broader', 'narrower', 'related')",
             name="ck_term_relations_relation_type",
         ),
-        CheckConstraint(
-            "confidence BETWEEN 0 AND 1", name="ck_term_relations_confidence"
-        ),
+        CheckConstraint("confidence BETWEEN 0 AND 1", name="ck_term_relations_confidence"),
         Index("ix_term_relations_primary_term", "primary_term"),
         Index("ix_term_relations_related_term", "related_term"),
     )
 
     primary_term: Mapped[str] = mapped_column(String(255), nullable=False)
     related_term: Mapped[str] = mapped_column(String(255), nullable=False)
-    relation_type: Mapped[str] = mapped_column(
-        String(20), default="synonym", nullable=False
-    )
+    relation_type: Mapped[str] = mapped_column(String(20), default="synonym", nullable=False)
     confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
 
     def __repr__(self) -> str:
@@ -748,9 +729,7 @@ class AuditLog(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "audit_log"
 
     user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), index=True)
-    actor_type: Mapped[str] = mapped_column(
-        String(30), default="system", nullable=False
-    )
+    actor_type: Mapped[str] = mapped_column(String(30), default="system", nullable=False)
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     resource_type: Mapped[str | None] = mapped_column(String(50), index=True)
     resource_id: Mapped[str | None] = mapped_column(String(64))

@@ -1,5 +1,6 @@
 from app.db.repositories.base import RepositoryBase
 from app.db.repositories.books import BookRepository
+from app.db.repositories.chat_history import ChatHistoryRepository
 from app.db.repositories.chunks import ChunkRepository
 from app.db.repositories.extraction import ExtractionRepository
 from app.db.repositories.ingestion_jobs import IngestionJobRepository
@@ -13,6 +14,7 @@ __all__ = [
     "RepositoryBase",
     "BookRepository",
     "ChunkRepository",
+    "ChatHistoryRepository",
     "ExtractionRepository",
     "IngestionJobRepository",
     "MetadataRepository",

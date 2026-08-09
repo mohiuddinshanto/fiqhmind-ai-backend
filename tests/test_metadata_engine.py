@@ -75,9 +75,7 @@ def test_multi_volume_filename_variants() -> None:
 
 
 def test_author_from_filename_separator() -> None:
-    metadata = extract_metadata(
-        "Sahih Muslim - Imam Muslim.pdf", [_page(1, _body_blocks("text"))]
-    )
+    metadata = extract_metadata("Sahih Muslim - Imam Muslim.pdf", [_page(1, _body_blocks("text"))])
     assert metadata.field_map["title"].value == "Sahih Muslim"
     assert metadata.field_map["author"].value == "Imam Muslim"
 

@@ -16,9 +16,7 @@ def health(
     settings: Settings = Depends(get_settings),
 ) -> HealthResponse:
     components: dict[str, ServiceHealth] = {
-        "postgres": ServiceHealth(
-            status="ok" if check_postgres_health() else "degraded"
-        ),
+        "postgres": ServiceHealth(status="ok" if check_postgres_health() else "degraded"),
         "redis": ServiceHealth(status="ok" if check_redis_health() else "degraded"),
         "qdrant": ServiceHealth(status="ok" if check_qdrant_health() else "degraded"),
         "storage": ServiceHealth(status="ok" if check_storage_health() else "degraded"),

@@ -30,9 +30,7 @@ class RateLimitStore:
         if count <= limit:
             return True, 0
 
-        oldest = cast(
-            "list[tuple[str, float]]", self._redis.zrange(key, 0, 0, withscores=True)
-        )
+        oldest = cast("list[tuple[str, float]]", self._redis.zrange(key, 0, 0, withscores=True))
         retry_after = 0
         if oldest:
             retry_after = max(1, int(window_seconds - (now - oldest[0][1])) + 1)

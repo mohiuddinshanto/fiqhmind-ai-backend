@@ -5,6 +5,7 @@ Revises: 0007_indexing
 Create Date: 2026-08-06
 
 """
+
 # ruff: noqa: E501  (migration DDL rows are intentionally long)
 from collections.abc import Sequence
 
@@ -29,15 +30,17 @@ def upgrade() -> None:
         sa.Column("related_term", sa.String(length=255), nullable=False),
         sa.Column("relation_type", sa.String(length=20), nullable=False),
         sa.Column("confidence", sa.Float(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=TIMESTAMP, nullable=False
+        ),
         sa.CheckConstraint(
             f"relation_type IN ({RELATION_TYPES})",
             name="ck_term_relations_relation_type",
         ),
-        sa.CheckConstraint(
-            "confidence BETWEEN 0 AND 1", name="ck_term_relations_confidence"
-        ),
+        sa.CheckConstraint("confidence BETWEEN 0 AND 1", name="ck_term_relations_confidence"),
         sa.UniqueConstraint(
             "primary_term", "related_term", "relation_type", name="uq_term_relations_edge"
         ),

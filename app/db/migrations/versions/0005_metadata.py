@@ -5,6 +5,7 @@ Revises: 0004_layout
 Create Date: 2026-08-06
 
 """
+
 # ruff: noqa: E501  (migration DDL rows are intentionally long)
 from collections.abc import Sequence
 
@@ -38,9 +39,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("job_id", name="uq_metadata_documents_job"),
     )
-    op.create_index(
-        "ix_metadata_documents_job_id", "metadata_documents", ["job_id"], unique=False
-    )
+    op.create_index("ix_metadata_documents_job_id", "metadata_documents", ["job_id"], unique=False)
     op.create_index(
         "ix_metadata_documents_upload_id", "metadata_documents", ["upload_id"], unique=False
     )
@@ -88,9 +87,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("document_id", "pdf_page", name="uq_page_metadata_document_page"),
     )
-    op.create_index(
-        "ix_page_metadata_document_id", "page_metadata", ["document_id"], unique=False
-    )
+    op.create_index("ix_page_metadata_document_id", "page_metadata", ["document_id"], unique=False)
 
     op.create_table(
         "metadata_structures",
@@ -108,9 +105,7 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "level IN ('kitab', 'bab', 'fasl', 'topic')", name="ck_metadata_structures_level"
         ),
-        sa.CheckConstraint(
-            "confidence BETWEEN 0 AND 1", name="ck_metadata_structures_confidence"
-        ),
+        sa.CheckConstraint("confidence BETWEEN 0 AND 1", name="ck_metadata_structures_confidence"),
         sa.ForeignKeyConstraint(["document_id"], ["metadata_documents.id"]),
         sa.PrimaryKeyConstraint("id"),
     )

@@ -62,9 +62,7 @@ def start_indexing(upload_id: str, session: DbSession) -> IndexStartResponse:
         raise IndexConflictError(f"indexing already in progress (job status: {job.status})")
 
     if job is None:
-        job = job_repo.create(
-            IngestionJob(upload_id=upload_id, kind="indexing", status="queued")
-        )
+        job = job_repo.create(IngestionJob(upload_id=upload_id, kind="indexing", status="queued"))
     else:
         job.status = "queued"
         job.progress_percent = 0

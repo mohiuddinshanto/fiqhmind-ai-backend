@@ -32,9 +32,7 @@ _TA_MARBUTA_RE = re.compile("[ة]")
 _HAMZA_RE = re.compile("[ؤئ]")
 
 # Combining marks (harakat, sukun, shadda, maddah, tatweel, Quranic signs).
-_COMBINING_RE = re.compile(
-    "[\u064B-\u065F\u0670\u06D6-\u06ED\u0640]"
-)
+_COMBINING_RE = re.compile("[\u064b-\u065f\u0670\u06d6-\u06ed\u0640]")
 
 # Attack / prompt-injection phrases that make a query unusable (case-folded
 # substring checks — deliberately no regex, so this is ReDoS-safe).
@@ -105,9 +103,7 @@ class QueryPreprocessor:
         if not display:
             raise QueryValidationError("query must not be empty")
         if len(display) > self._max_length:
-            raise QueryValidationError(
-                f"query exceeds the {self._max_length}-character limit"
-            )
+            raise QueryValidationError(f"query exceeds the {self._max_length}-character limit")
         lowered = display.lower()
         for pattern in _ATTACK_PATTERNS + _PROFANITY_PATTERNS:
             if pattern in lowered:

@@ -214,7 +214,7 @@ def _extract_author(stem: str) -> tuple[str, str | None]:
     if not matches:
         return stem, None
     last = matches[-1]
-    author = stem[last.end():].strip()
+    author = stem[last.end() :].strip()
     if not author:
         return stem, None
     return stem[: last.start()], author
@@ -570,9 +570,7 @@ def extract_metadata(filename: str, pages: list[PageInfo]) -> DocumentMetadata:
         page.fasl = active.get(LEVEL_FASL)
 
     confidences = [item.confidence for item in fields]
-    confidences += [
-        item.confidence for item in page_numbers if not item.page_number_uncertain
-    ]
+    confidences += [item.confidence for item in page_numbers if not item.page_number_uncertain]
     overall = round(sum(confidences) / len(confidences), 4) if confidences else 0.0
 
     return DocumentMetadata(
@@ -615,8 +613,7 @@ class MetadataRunner:
         pipeline_job = self._pipeline_job(upload)
         if pipeline_job is None:
             raise MetadataConflictError(
-                "metadata extraction requires a completed extraction job "
-                "(no extracted pages found)"
+                "metadata extraction requires a completed extraction job (no extracted pages found)"
             )
         page_rows = self._extraction_repo.list_pages(pipeline_job.id)
         pages = [self._load_page(row) for row in page_rows]

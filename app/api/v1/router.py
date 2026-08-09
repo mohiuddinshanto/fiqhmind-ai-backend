@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    chat,
     chunking,
     extraction,
     health,
@@ -20,3 +21,4 @@ api_router.include_router(metadata.router)
 api_router.include_router(chunking.router)
 api_router.include_router(indexing.router)
 api_router.include_router(retrieval.router)
+api_router.include_router(chat.router)

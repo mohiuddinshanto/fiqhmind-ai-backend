@@ -102,10 +102,7 @@ def _separator_y(page: PageInfo) -> float | None:
         rect = drawing.bbox
         width = rect[2] - rect[0]
         y_center = (rect[1] + rect[3]) / 2
-        if (
-            width >= page.width * 0.5
-            and page.height * 0.55 <= y_center <= page.height * 0.95
-        ):
+        if width >= page.width * 0.5 and page.height * 0.55 <= y_center <= page.height * 0.95:
             return y_center
     return None
 
@@ -227,19 +224,9 @@ def _reading_order(page: PageInfo, direction: str) -> dict[int, int]:
     Headers first (top), then body flow in column-major order (right-to-left
     for RTL, left-to-right for LTR), then footers last.
     """
-    headers = [
-        block
-        for block in page.blocks
-        if block.bbox[1] <= page.height * HEADER_BAND
-    ]
-    footers = [
-        block
-        for block in page.blocks
-        if block.bbox[3] >= page.height * FOOTER_BAND
-    ]
-    body = [
-        block for block in page.blocks if block not in headers and block not in footers
-    ]
+    headers = [block for block in page.blocks if block.bbox[1] <= page.height * HEADER_BAND]
+    footers = [block for block in page.blocks if block.bbox[3] >= page.height * FOOTER_BAND]
+    body = [block for block in page.blocks if block not in headers and block not in footers]
 
     columns = _cluster_columns(body, page.width)
     if direction == DIRECTION_RTL:
@@ -281,9 +268,7 @@ def analyze_page(page: PageInfo) -> PageLayout:
 
     classifications = []
     for block in page.blocks:
-        region, confidence, reason = _classify_block(
-            block, page, separator_y, margin_indices
-        )
+        region, confidence, reason = _classify_block(block, page, separator_y, margin_indices)
         classifications.append(
             BlockLayout(
                 block_index=block.index,

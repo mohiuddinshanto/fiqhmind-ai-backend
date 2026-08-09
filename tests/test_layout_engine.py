@@ -57,9 +57,7 @@ def test_empty_page_is_ltr_with_no_columns() -> None:
 
 
 def test_single_column_classifies_all_blocks_as_main() -> None:
-    layout = analyze_page(
-        _page([_main_block(0, 100), _main_block(1, 140), _main_block(2, 180)])
-    )
+    layout = analyze_page(_page([_main_block(0, 100), _main_block(1, 140), _main_block(2, 180)]))
     assert layout.column_count == 1
     assert all(item.region == REGION_MAIN for item in layout.blocks)
 

@@ -1,3 +1,7 @@
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,17 +12,35 @@ from app.core.config import get_settings
 from app.core.exceptions import BaseAppError
 from app.core.logging import configure_logging
 from app.middleware.request_context import RequestContextMiddleware
+from app.services.generation.providers import ProviderHealthService
+
+logger = structlog.get_logger(__name__)
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings)
 
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        health = ProviderHealthService(settings)
+        task = await health.start_health_checks()
+        logger.info("provider_health_checks_started")
+        try:
+            yield
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
     application = FastAPI(
         title=settings.app_name,
         version=settings.version,
         docs_url="/docs" if settings.debug else None,
         redoc_url=None,
+        lifespan=lifespan,
     )
 
     application.add_middleware(
