@@ -17,7 +17,12 @@ import fitz
 import structlog
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import EncryptedPdfError, MalformedPdfError, TransientExtractionError
+from app.core.exceptions import (
+    EncryptedPdfError,
+    MalformedPdfError,
+    PdfPageLimitError,
+    TransientExtractionError,
+)
 from app.core.storage import StorageProvider
 from app.db.models import IngestionJob, Upload
 from app.db.repositories import ExtractionRepository
@@ -115,6 +120,14 @@ class PdfExtraction:
         return sum(page.confidence for page in self.pages) / len(self.pages)
 
 
+def _guard_page_count(page_count: int, max_pages: int | None) -> None:
+    """Reject decompression-bomb PDFs that exceed the configured page cap."""
+    if max_pages is not None and page_count > max_pages:
+        raise PdfPageLimitError(
+            f"pdf has {page_count} pages, exceeding the {max_pages}-page limit"
+        )
+
+
 def _open_pdf(path: str) -> fitz.Document:
     """Open a PDF with PyMuPDF, mapping permanent failures to typed errors."""
     try:
@@ -129,10 +142,11 @@ def _open_pdf(path: str) -> fitz.Document:
     return document
 
 
-def extract_pdf(path: str) -> PdfExtraction:
+def extract_pdf(path: str, *, max_pages: int | None = None) -> PdfExtraction:
     """Extract every page of the PDF at `path` into structured (coordinate-preserving) data."""
     document = _open_pdf(path)
     try:
+        _guard_page_count(document.page_count, max_pages)
         extraction = PdfExtraction(page_count=document.page_count)
         for page_index in range(document.page_count):
             page = document.load_page(page_index)
@@ -227,9 +241,12 @@ def _extract_drawings(page: fitz.Page) -> list[DrawingInfo]:
 class ExtractionRunner:
     """Streams a PDF's extracted pages into PostgreSQL, updating job progress."""
 
-    def __init__(self, session: Session, storage: StorageProvider) -> None:
+    def __init__(
+        self, session: Session, storage: StorageProvider, *, max_pages: int | None = None
+    ) -> None:
         self._session = session
         self._storage = storage
+        self._max_pages = max_pages
         self._repo = ExtractionRepository(session)
 
     def run(self, job: IngestionJob, upload: Upload) -> PdfExtraction:
@@ -237,6 +254,7 @@ class ExtractionRunner:
         self._begin(job, upload)
         path = self._storage.resolve(upload.storage_path or "")
         document = _open_pdf(path)
+        _guard_page_count(document.page_count, self._max_pages)
 
         upload.page_count = document.page_count
         self._session.commit()

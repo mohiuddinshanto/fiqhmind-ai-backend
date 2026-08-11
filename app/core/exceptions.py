@@ -4,10 +4,13 @@ class BaseAppError(Exception):
     status_code: int = 500
     code: str = "internal_error"
 
-    def __init__(self, message: str, *, details: dict | None = None) -> None:
+    def __init__(
+        self, message: str, *, details: dict | None = None, headers: dict[str, str] | None = None
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.details = details or {}
+        self.headers = headers or {}
 
 
 class NotFoundError(BaseAppError):
@@ -28,6 +31,9 @@ class AuthError(BaseAppError):
 class RateLimitError(BaseAppError):
     status_code = 429
     code = "rate_limit_exceeded"
+
+    def __init__(self, message: str, *, retry_after_seconds: int = 0) -> None:
+        super().__init__(message, headers={"Retry-After": str(max(1, retry_after_seconds))})
 
 
 class ProviderError(BaseAppError):
@@ -103,6 +109,11 @@ class RerankerError(BaseAppError):
 class MalformedPdfError(BaseAppError):
     status_code = 422
     code = "malformed_pdf"
+
+
+class PdfPageLimitError(BaseAppError):
+    status_code = 422
+    code = "pdf_page_limit_exceeded"
 
 
 class EncryptedPdfError(BaseAppError):

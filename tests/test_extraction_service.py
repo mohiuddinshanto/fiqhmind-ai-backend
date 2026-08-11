@@ -8,7 +8,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.tasks.ingestion as ingestion_module
-from app.core.exceptions import EncryptedPdfError, MalformedPdfError
+from app.core.exceptions import (
+    EncryptedPdfError,
+    MalformedPdfError,
+    PdfPageLimitError,
+)
 from app.core.storage import LocalStorageProvider
 from app.db.base import Base
 from app.db.models import IngestionJob, Upload
@@ -156,6 +160,22 @@ def test_extract_pdf_raises_on_encrypted_file(session: Session, tmp_path) -> Non
     path = build_encrypted_pdf(tmp_path / "encrypted.pdf")
     with pytest.raises(EncryptedPdfError):
         extract_pdf(str(path))
+
+
+def test_extract_pdf_rejects_page_count_above_cap(session: Session, tmp_path) -> None:
+    pdf = build_text_pdf(tmp_path / "text.pdf")
+    with pytest.raises(PdfPageLimitError):
+        extract_pdf(str(pdf), max_pages=1)
+
+
+def test_runner_rejects_page_count_above_cap(
+    session: Session, storage: LocalStorageProvider, tmp_path
+) -> None:
+    pdf = build_text_pdf(tmp_path / "text.pdf")
+    upload, job = _make_upload_and_job(session, storage, pdf)
+
+    with pytest.raises(PdfPageLimitError):
+        ExtractionRunner(session, storage, max_pages=1).run(job, upload)
 
 
 def test_runner_streams_pages_and_blocks_into_db(

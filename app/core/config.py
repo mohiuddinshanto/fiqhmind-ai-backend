@@ -100,6 +100,7 @@ class Settings(BaseSettings):
     upload_storage_path: str = "storage/uploads"
     upload_storage_provider: str = "local"  # local | r2 (r2 lands in a later phase)
     upload_max_size_bytes: int = 200 * 1024 * 1024  # ARCHITECTURE.md: 200 MB cap
+    upload_max_pages: int = 2000  # decompression-bomb guard: reject oversized PDFs
     upload_allowed_mime: str = "application/pdf"
     upload_chunk_size: int = 64 * 1024  # streaming read chunk, never buffer whole files
     upload_max_files_per_request: int = 20

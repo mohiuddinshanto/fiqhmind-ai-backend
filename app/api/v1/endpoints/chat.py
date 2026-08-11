@@ -19,7 +19,7 @@ import structlog
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from app.api.v1.deps import DbSession, get_store_dep
+from app.api.v1.deps import DbSession, get_store_dep, require_rate_limit
 from app.core.qdrant import QdrantStore
 from app.db.repositories import ChatHistoryRepository
 from app.schemas.chat import ChatAnswer, ChatRequest
@@ -40,6 +40,7 @@ def chat_question(
     request: ChatRequest,
     session: DbSession,
     store: Annotated[QdrantStore, Depends(get_store_dep)],
+    _: Annotated[None, Depends(require_rate_limit("chat"))] = None,
 ) -> StreamingResponse:
     """Retrieve evidence, generate a grounded answer, stream it as SSE."""
     runner = RetrievalRunner(session, store)

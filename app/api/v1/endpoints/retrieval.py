@@ -3,7 +3,7 @@ from typing import Annotated
 import structlog
 from fastapi import APIRouter, Depends
 
-from app.api.v1.deps import DbSession, get_store_dep
+from app.api.v1.deps import DbSession, get_store_dep, require_rate_limit
 from app.core.qdrant import QdrantStore
 from app.schemas.retrieval import (
     RetrievalChunk,
@@ -23,6 +23,7 @@ def retrieval_search(
     request: RetrievalSearchRequest,
     session: DbSession,
     store: Annotated[QdrantStore, Depends(get_store_dep)],
+    _: Annotated[None, Depends(require_rate_limit("search"))] = None,
 ) -> RetrievalSearchResponse:
     """Phase 9 pipeline: preprocess → translate → expand → hybrid → rerank → compress.
 

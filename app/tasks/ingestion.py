@@ -13,11 +13,13 @@ upserts those chunks into the Qdrant vector store.
 import structlog
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.exceptions import (
     ChunkConflictError,
     EncryptedPdfError,
     IndexConflictError,
     MalformedPdfError,
+    PdfPageLimitError,
 )
 from app.core.postgres import get_session_factory
 from app.core.qdrant import get_qdrant_store
@@ -83,7 +85,11 @@ def extract_pdf_task(self, job_id: str, upload_id: str) -> None:
             logger.warning("extraction_job_missing", job_id=job_id, upload_id=upload_id)
             return
 
-        runner = ExtractionRunner(session, get_storage_provider())
+        runner = ExtractionRunner(
+            session,
+            get_storage_provider(),
+            max_pages=get_settings().upload_max_pages,
+        )
         result = runner.run(job, upload)
         job_repo.update_status(job, "completed", progress_percent=100, current_step="extracting")
         upload.status = "completed"
@@ -96,7 +102,7 @@ def extract_pdf_task(self, job_id: str, upload_id: str) -> None:
             has_text_layer=result.has_text_layer,
             confidence=round(result.confidence, 4),
         )
-    except (MalformedPdfError, EncryptedPdfError) as exc:
+    except (MalformedPdfError, EncryptedPdfError, PdfPageLimitError) as exc:
         session.rollback()
         _record_error_and_fail(session, job, upload, exc.message, permanent=True)
         logger.warning("extraction_permanent_failure", job_id=job_id, error=exc.message)

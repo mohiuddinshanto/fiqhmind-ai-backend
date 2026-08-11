@@ -274,3 +274,27 @@ def test_chat_persists_history_row(session: Session, client: TestClient) -> None
     assert row.refusal is None
     assert len(row.sources) == 2
     assert row.sources[0]["chunk_id"] == "c1"
+
+
+def test_chat_rate_limited_per_ip_with_retry_after(client: TestClient, monkeypatch) -> None:
+    from app.api.v1 import deps as deps_module
+    from app.services.rate_limit import RateLimitStore
+
+    # The conftest fixture overrides get_redis with a fakeredis instance.
+    redis = app.dependency_overrides[deps_module.get_redis]()
+    limiter = RateLimitStore(redis)
+    scope = "chat"
+
+    # Drive the shared redis limiter past the 20/min chat cap for this IP.
+    client_ip = "testclient"
+    for _ in range(20):
+        allowed, _ = limiter.check(f"{scope}:ip:{client_ip}", limit=20, window_seconds=60)
+        assert allowed
+    allowed, retry_after = limiter.check(f"{scope}:ip:{client_ip}", limit=20, window_seconds=60)
+    assert not allowed
+    assert retry_after > 0
+
+    response = client.post("/api/v1/chat", json={"query": "ما حكم الوضوء"})
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "rate_limit_exceeded"
+    assert int(response.headers["Retry-After"]) > 0
