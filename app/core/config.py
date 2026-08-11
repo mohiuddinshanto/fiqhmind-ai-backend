@@ -96,6 +96,15 @@ class Settings(BaseSettings):
     rate_limit_ingest_per_min: int = 5
     rate_limit_eval_per_hour: int = 2
 
+    # Phase 15 caching (Redis-backed). The cache layer is best-effort: when Redis
+    # is unavailable the application degrades to the uncached path, so these TTLs
+    # only bound how long cached entries live (ARCHITECTURE §Phase 15 "Caching").
+    cache_qa_ttl_seconds: int = 86400  # QA answer cache — 24h, evicted daily by beat
+    cache_embedding_ttl_seconds: int = 604800  # embedding cache — 7d, content-addressed
+    cache_retrieval_ttl_seconds: int = 900  # chunk-level results cache — 15 min hot queries
+    # Batched embedding per ARCHITECTURE §Phase 15 "Batch processing (ingestion)".
+    embedding_batch_size: int = 128
+
     # Uploads (per Phase 5.1 / Phase 3 foundation)
     upload_storage_path: str = "storage/uploads"
     upload_storage_provider: str = "local"  # local | r2 (r2 lands in a later phase)

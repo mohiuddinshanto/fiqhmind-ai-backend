@@ -21,6 +21,7 @@ from app.db.repositories import (
     UploadRepository,
 )
 from app.services.chunking import ChunkRunner
+from app.services.embedding import DeterministicEmbedder
 from app.services.extraction import ExtractionRunner
 from app.services.indexing import IndexingRunner
 from app.services.metadata import MetadataRunner
@@ -202,6 +203,46 @@ def test_runner_upserts_in_batches(
 
     assert len(store.upsert_batches) == 2
     assert sum(len(batch) for batch in store.upsert_batches) == 4
+
+
+class RecordingEmbedder:
+    """Records `embed_batch` sizes and texts for the Phase 15 batching contract."""
+
+    def __init__(self) -> None:
+        self.batch_sizes: list[int] = []
+        self.texts: list[str] = []
+        self._deterministic = DeterministicEmbedder(dim=64)
+
+    def embed(self, text: str):
+        raise AssertionError("batched indexing must use embed_batch, not embed")
+
+    def embed_batch(self, texts: list[str]):
+        self.batch_sizes.append(len(texts))
+        self.texts.extend(texts)
+        return [self._deterministic.embed(text) for text in texts]
+
+
+def test_runner_embeds_in_batches_preserving_order(
+    session: Session, storage: LocalStorageProvider, tmp_path
+) -> None:
+    pdf = build_structured_book(tmp_path / "book.pdf")
+    upload, chunk_job = _chunked_upload(session, storage, pdf)
+    index_job = _index_job(session, upload)
+    store = FakeStore()
+    embedder = RecordingEmbedder()
+
+    IndexingRunner(session, store, embedder=embedder, embedding_batch_size=2).run(
+        index_job, upload, chunking_job_id=chunk_job.id
+    )
+
+    # 4 chunks embedded in batches of 2, in chunk order.
+    assert embedder.batch_sizes == [2, 2]
+    chunks = ChunkRepository(session).list_by_job(chunk_job.id)
+    assert embedder.texts == [chunk.raw_text for chunk in chunks]
+
+    # Point order mirrors input chunk order (ordering preserved end to end).
+    points = [point for batch in store.upsert_batches for point in batch]
+    assert [point.id for point in points] == [chunk.chunk_id for chunk in chunks]
 
 
 def test_runner_fails_without_chunking_job(

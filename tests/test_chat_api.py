@@ -177,7 +177,7 @@ def test_chat_respects_answer_language(client: TestClient) -> None:
 
 def test_chat_insufficient_evidence_emits_refusal(client: TestClient, monkeypatch) -> None:
     class EmptyRunner:
-        def __init__(self, session, store) -> None:
+        def __init__(self, session, store, **kwargs) -> None:
             pass
 
         def search(self, query, *, filters=None, top_n=None) -> RetrievalResult:
@@ -209,7 +209,7 @@ def test_chat_forwards_filters_and_top_n(client: TestClient, monkeypatch) -> Non
     captured = {}
 
     class FakeRunner:
-        def __init__(self, session, store) -> None:
+        def __init__(self, session, store, **kwargs) -> None:
             pass
 
         def search(self, query, *, filters: PayloadFilter | None = None, top_n=None):
@@ -274,6 +274,62 @@ def test_chat_persists_history_row(session: Session, client: TestClient) -> None
     assert row.refusal is None
     assert len(row.sources) == 2
     assert row.sources[0]["chunk_id"] == "c1"
+
+
+def test_chat_serves_repeated_question_from_qa_cache(
+    client: TestClient, monkeypatch
+) -> None:
+    calls = {"generator": 0}
+
+    real_generator = chat_endpoints.get_generator
+
+    def counting_generator():
+        generator = real_generator()
+        original_generate = generator.generate
+
+        def generate(retrieval, *, answer_language="bn"):
+            calls["generator"] += 1
+            return original_generate(retrieval, answer_language=answer_language)
+
+        generator.generate = generate
+        return generator
+
+    monkeypatch.setattr(chat_endpoints, "get_generator", counting_generator)
+
+    first = client.post("/api/v1/chat", json={"query": "ما حكم الوضوء"})
+    assert first.status_code == 200
+    assert calls["generator"] == 1
+
+    second = client.post("/api/v1/chat", json={"query": "ما حكم الوضوء"})
+    assert second.status_code == 200
+    # The repeated question is served from the QA cache — no re-generation.
+    assert calls["generator"] == 1
+    assert _parse_sse(second.text) == _parse_sse(first.text)
+
+
+def test_chat_qa_cache_is_scoped_by_language(client: TestClient, monkeypatch) -> None:
+    calls = {"generator": 0}
+
+    real_generator = chat_endpoints.get_generator
+
+    def counting_generator():
+        generator = real_generator()
+        original_generate = generator.generate
+
+        def generate(retrieval, *, answer_language="bn"):
+            calls["generator"] += 1
+            return original_generate(retrieval, answer_language=answer_language)
+
+        generator.generate = generate
+        return generator
+
+    monkeypatch.setattr(chat_endpoints, "get_generator", counting_generator)
+
+    client.post("/api/v1/chat", json={"query": "ما حكم الوضوء", "answer_language": "bn"})
+    client.post("/api/v1/chat", json={"query": "ما حكم الوضوء", "answer_language": "en"})
+
+    # Different answer language => a distinct QA cache entry.
+    assert calls["generator"] == 2
 
 
 def test_chat_rate_limited_per_ip_with_retry_after(client: TestClient, monkeypatch) -> None:

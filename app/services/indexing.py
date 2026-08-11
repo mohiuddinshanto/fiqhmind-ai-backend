@@ -20,11 +20,18 @@ import structlog
 from qdrant_client import models
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings, get_settings
 from app.core.exceptions import IndexConflictError
 from app.core.qdrant import SPARSE_VECTOR_NAME, QdrantStore
 from app.db.models import Chunk, IngestionJob, MetadataDocument, Upload
 from app.db.repositories import ChunkRepository, IngestionJobRepository, MetadataRepository
-from app.services.embedding import Embedder, get_embedder
+from app.services.cache import CacheService
+from app.services.embedding import (
+    Embedder,
+    Embedding,
+    build_cached_embedder,
+    get_embedder,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -99,11 +106,21 @@ class IndexingRunner:
         embedder: Embedder | None = None,
         *,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        embedding_batch_size: int | None = None,
+        cache: CacheService | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self._session = session
         self._store = store
-        self._embedder = embedder or get_embedder()
+        self._settings = settings or get_settings()
+        embedder = embedder or get_embedder(self._settings)
+        if cache is not None:
+            embedder = build_cached_embedder(embedder, cache, self._settings)
+        self._embedder = embedder
         self._batch_size = max(int(batch_size), 1)
+        self._embedding_batch_size = max(
+            int(embedding_batch_size or self._settings.embedding_batch_size), 1
+        )
         self._chunk_repo = ChunkRepository(session)
         self._metadata_repo = MetadataRepository(session)
 
@@ -120,7 +137,7 @@ class IndexingRunner:
         self._begin(job, upload)
 
         meta = self._payload_meta(document)
-        points = [self._to_point(chunk, upload, chunking_job_id, meta) for chunk in chunks]
+        points = self._build_points(chunks, upload, chunking_job_id, meta)
         self._store.delete_by_filter(_upload_filter(upload.id))
 
         total = len(points)
@@ -180,8 +197,8 @@ class IndexingRunner:
         upload: Upload,
         chunking_job_id: str | None,
         meta: dict[str, str | None],
+        embedding: Embedding,
     ) -> models.PointStruct:
-        embedding = self._embedder.embed(chunk.raw_text)
         payload = build_chunk_payload(
             chunk,
             upload_id=upload.id,
@@ -204,6 +221,26 @@ class IndexingRunner:
             },
             payload=payload,
         )
+
+    def _build_points(
+        self,
+        chunks: list[Chunk],
+        upload: Upload,
+        chunking_job_id: str | None,
+        meta: dict[str, str | None],
+    ) -> list[models.PointStruct]:
+        """Embed chunks in `embedding_batch_size` batches, preserving input order.
+
+        `embed_batch` returns one vector per input text in the same order, so the
+        point list maps 1:1 onto the chunk list (Phase 15 batched embedding).
+        """
+        points: list[models.PointStruct] = []
+        for start in range(0, len(chunks), self._embedding_batch_size):
+            batch_chunks = chunks[start : start + self._embedding_batch_size]
+            embeddings = self._embedder.embed_batch([chunk.raw_text for chunk in batch_chunks])
+            for chunk, embedding in zip(batch_chunks, embeddings):
+                points.append(self._to_point(chunk, upload, chunking_job_id, meta, embedding))
+        return points
 
     def _begin(self, job: IngestionJob, upload: Upload) -> None:
         job.status = "embedding"

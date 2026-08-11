@@ -23,9 +23,11 @@ from app.core.exceptions import (
 )
 from app.core.postgres import get_session_factory
 from app.core.qdrant import get_qdrant_store
+from app.core.redis import get_redis
 from app.core.storage import get_storage_provider
 from app.db.models import IngestionJob, Upload
 from app.db.repositories import IngestionJobRepository, UploadRepository
+from app.services.cache import CacheService
 from app.services.chunking import ChunkRunner
 from app.services.extraction import ExtractionRunner
 from app.services.indexing import IndexingRunner
@@ -261,7 +263,11 @@ def run_indexing_task(self, job_id: str, upload_id: str, chunking_job_id: str) -
             logger.warning("indexing_job_missing", job_id=job_id, upload_id=upload_id)
             return
 
-        result = IndexingRunner(session, get_qdrant_store()).run(
+        result = IndexingRunner(
+            session,
+            get_qdrant_store(),
+            cache=CacheService(get_redis()),
+        ).run(
             job, upload, chunking_job_id=chunking_job_id
         )
         job_repo.update_status(job, "indexed", progress_percent=100, current_step="embedding")

@@ -11,13 +11,18 @@ weighted higher; for paraphrased questions dense weighted higher. Default
 balanced (alpha = 0.5), refined later by the Phase 17 eval harness.
 
 `rrf_fuse` and `build_payload_filter` are pure (no I/O); `HybridSearchService`
-is the thin wiring: embed the query, run both searches in parallel, fuse.
+is the thin wiring: embed the query, run both searches concurrently, fuse.
 Payload filters (book/volume/region/verified) are applied at query time, not
 post-filtered, per ARCHITECTURE §Phase 9 "metadata filters".
+
+Phase 15 §706: the dense and sparse Qdrant calls overlap on worker threads via
+asyncio (embedding + Qdrant are I/O-bound). `search()` stays synchronous for
+endpoints/Celery/tests; `search_async()` is the same search for async callers.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -25,6 +30,7 @@ import structlog
 from qdrant_client import models
 from qdrant_client.http.models.models import ScoredPoint
 
+from app.core.asyncio_utils import run_coroutine
 from app.core.config import get_settings
 from app.core.qdrant import QdrantStore
 from app.services.embedding import Embedder, get_embedder
@@ -126,7 +132,12 @@ def build_payload_filter(
 
 
 class HybridSearchService:
-    """Runs dense + sparse in parallel and fuses with RRF (Phase 8)."""
+    """Runs dense + sparse in parallel and fuses with RRF (Phase 8).
+
+    Phase 15 §706: embedding and both Qdrant searches run on worker threads so
+    the network/embedding calls overlap; `search()` is the sync entry point and
+    `search_async()` the coroutine the retrieval pipeline awaits directly.
+    """
 
     def __init__(
         self,
@@ -147,18 +158,57 @@ class HybridSearchService:
         alpha: float = 0.5,
         filters: PayloadFilter | None = None,
     ) -> list[SearchHit]:
-        """Embed `query` and return the fused top-`limit` hits.
+        """Sync entry point: embed `query`, search dense+sparse concurrently, fuse."""
+        return run_coroutine(
+            lambda: self._search_async(query, limit=limit, alpha=alpha, filters=filters)
+        )
 
-        This is the Phase 8 primitive; query normalization, translation and
-        reranking belong to the Phase 9 retrieval pipeline.
+    async def search_async(
+        self,
+        query: str,
+        *,
+        limit: int = 40,
+        alpha: float = 0.5,
+        filters: PayloadFilter | None = None,
+    ) -> list[SearchHit]:
+        """Async entry point used by the retrieval pipeline (Phase 15 §706)."""
+        return await self._search_async(query, limit=limit, alpha=alpha, filters=filters)
+
+    async def _search_async(
+        self,
+        query: str,
+        *,
+        limit: int,
+        alpha: float,
+        filters: PayloadFilter | None,
+    ) -> list[SearchHit]:
+        """Embed `query`, run dense + sparse Qdrant searches concurrently, fuse.
+
+        A single failing side is tolerated (logged, fused with the surviving
+        side's hits); only when both sides fail is the first error re-raised so
+        an outage is never silently swallowed as empty results.
         """
-        embedding = self._embedder.embed(query)
+        embedding = await asyncio.to_thread(self._embedder.embed, query)
         filter_kwargs = filters.__dict__ if filters is not None else {}
         query_filter = build_payload_filter(**filter_kwargs)
         sparse = models.SparseVector(
             indices=embedding.sparse.indices,
             values=embedding.sparse.values,
         )
-        dense_hits = self._store.search_dense(embedding.dense, limit=limit, filter_=query_filter)
-        sparse_hits = self._store.search_sparse(sparse, limit=limit, filter_=query_filter)
+        dense_result, sparse_result = await asyncio.gather(
+            asyncio.to_thread(
+                self._store.search_dense, embedding.dense, limit=limit, filter_=query_filter
+            ),
+            asyncio.to_thread(
+                self._store.search_sparse, sparse, limit=limit, filter_=query_filter
+            ),
+            return_exceptions=True,
+        )
+        if isinstance(dense_result, BaseException) and isinstance(sparse_result, BaseException):
+            raise dense_result
+        dense_hits = [] if isinstance(dense_result, BaseException) else dense_result
+        sparse_hits = [] if isinstance(sparse_result, BaseException) else sparse_result
+        for side, result in (("dense", dense_result), ("sparse", sparse_result)):
+            if isinstance(result, BaseException):
+                logger.warning("hybrid_search_side_failed", side=side, error=str(result))
         return rrf_fuse(dense_hits, sparse_hits, k=self._k, alpha=alpha, limit=limit)

@@ -9,8 +9,14 @@ typed Server-Sent Events in the ARCHITECTURE §Phase 10 order:
 The full answer is generated and validated *before* the stream starts, so the
 client only ever sees a validated, grounded answer. If an unexpected error
 occurs mid-stream, an `error` event is emitted before the stream closes.
+
+Phase 15: the validated answer (plus the retrieval context it was built from) is
+cached under the QA answer cache keyed by the full request scope, so repeated
+questions skip retrieval + generation entirely. Cache failures degrade to the
+uncached path and never break the request.
 """
 
+import hashlib
 import json
 from collections.abc import AsyncIterator
 from typing import Annotated
@@ -19,14 +25,26 @@ import structlog
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from app.api.v1.deps import DbSession, get_store_dep, require_rate_limit
+from app.api.v1.deps import (
+    DbSession,
+    get_cache_service,
+    get_store_dep,
+    require_rate_limit,
+)
+from app.core.config import get_settings
 from app.core.qdrant import QdrantStore
 from app.db.repositories import ChatHistoryRepository
 from app.schemas.chat import ChatAnswer, ChatRequest
 from app.schemas.retrieval import RetrievalChunk
+from app.services.cache import CacheService
 from app.services.generation.service import get_generator
 from app.services.hybrid_search import PayloadFilter
-from app.services.retrieval import RetrievalResult, RetrievalRunner
+from app.services.retrieval import (
+    RetrievalResult,
+    RetrievalRunner,
+    _retrieval_from_dict,
+    _retrieval_to_dict,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -40,21 +58,35 @@ def chat_question(
     request: ChatRequest,
     session: DbSession,
     store: Annotated[QdrantStore, Depends(get_store_dep)],
+    cache: Annotated[CacheService, Depends(get_cache_service)],
     _: Annotated[None, Depends(require_rate_limit("chat"))] = None,
 ) -> StreamingResponse:
     """Retrieve evidence, generate a grounded answer, stream it as SSE."""
-    runner = RetrievalRunner(session, store)
-    retrieval = runner.search(
-        request.query,
-        filters=PayloadFilter(
-            book_id=request.book_id,
-            volume=request.volume,
-            region=request.region,
-            verified=request.verified,
-        ),
-        top_n=request.top_n,
-    )
-    answer = get_generator().generate(retrieval, answer_language=request.answer_language)
+    cache_key = _qa_cache_key(request)
+    cached = _cached_answer(cache, cache_key)
+    if cached is not None:
+        retrieval, answer = cached
+    else:
+        runner = RetrievalRunner(session, store, cache=cache)
+        retrieval = runner.search(
+            request.query,
+            filters=PayloadFilter(
+                book_id=request.book_id,
+                volume=request.volume,
+                region=request.region,
+                verified=request.verified,
+            ),
+            top_n=request.top_n,
+        )
+        answer = get_generator().generate(retrieval, answer_language=request.answer_language)
+        cache.set(
+            cache_key,
+            {
+                "retrieval": _retrieval_to_dict(retrieval),
+                "answer": answer.model_dump(mode="json"),
+            },
+            ttl_seconds=get_settings().cache_qa_ttl_seconds,
+        )
 
     ChatHistoryRepository(session).add(
         question=retrieval.query,
@@ -74,6 +106,39 @@ def chat_question(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _qa_cache_key(request: ChatRequest) -> str:
+    """Scope-hashed QA cache key: every input that shapes the answer is included."""
+    scope = json.dumps(
+        [
+            request.query,
+            request.book_id,
+            request.volume,
+            request.region,
+            request.verified,
+            request.top_n,
+            request.answer_language,
+        ],
+        ensure_ascii=False,
+    )
+    return f"qa:v1:{hashlib.sha256(scope.encode('utf-8')).hexdigest()}"
+
+
+def _cached_answer(
+    cache: CacheService, cache_key: str
+) -> tuple[RetrievalResult, ChatAnswer] | None:
+    """Read the QA cache; a corrupt/partial entry is recomputed, never fatal."""
+    cached = cache.get(cache_key)
+    if cached is None:
+        return None
+    try:
+        retrieval = _retrieval_from_dict(cached["retrieval"])
+        answer = ChatAnswer.model_validate(cached["answer"])
+    except Exception as exc:  # noqa: BLE001 - corrupt cache is recomputed
+        logger.warning("qa_cache_read_failed", key=cache_key, error=str(exc))
+        return None
+    return retrieval, answer
 
 
 async def _stream_events(

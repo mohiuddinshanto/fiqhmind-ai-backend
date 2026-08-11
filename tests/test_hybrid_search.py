@@ -1,5 +1,7 @@
 """Tests for the Phase 8 hybrid search layer (RRF fusion + payload filters)."""
 
+import asyncio
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -172,3 +174,59 @@ def test_hybrid_search_without_filters_passes_none() -> None:
 
     assert store.dense_calls[0][2] is None
     assert store.sparse_calls[0][2] is None
+
+
+class BlockingStore:
+    """Blocks both searches until released; each signals when it was entered.
+
+    If the dense and sparse searches are truly concurrent, *both* signals are
+    set while neither search has returned — no sleeps needed, the barriers
+    decide.
+    """
+
+    def __init__(self) -> None:
+        self.dense_started = threading.Event()
+        self.sparse_started = threading.Event()
+        self.release = threading.Event()
+
+    def search_dense(self, vector, *, limit, filter_=None):
+        self.dense_started.set()
+        self.release.wait(timeout=5)
+        return [_point("a"), _point("b")]
+
+    def search_sparse(self, vector, *, limit, filter_=None):
+        self.sparse_started.set()
+        self.release.wait(timeout=5)
+        return [_point("b"), _point("c")]
+
+
+def test_hybrid_search_runs_dense_and_sparse_concurrently() -> None:
+    """Phase 15 §706: dense + sparse are in flight at the same time (barriers)."""
+    store = BlockingStore()
+    service = HybridSearchService(store, embedder=RecordingEmbedder(), k=10)
+    results: dict[str, list] = {}
+
+    def _run() -> None:
+        results["hits"] = service.search("washing before prayer", limit=5)
+
+    thread = threading.Thread(target=_run)
+    thread.start()
+
+    assert store.dense_started.wait(timeout=5)
+    assert store.sparse_started.wait(timeout=5)  # both entered before either returned
+    store.release.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert [hit.chunk_id for hit in results["hits"]] == ["b", "a", "c"]
+
+
+def test_hybrid_search_async_api_returns_fused_results() -> None:
+    store = _store()
+    service = HybridSearchService(store, embedder=RecordingEmbedder(), k=10)
+
+    hits = asyncio.run(service.search_async("washing before prayer", limit=5))
+
+    assert len(store.dense_calls) == 1
+    assert len(store.sparse_calls) == 1
+    assert [hit.chunk_id for hit in hits] == ["b", "a", "c"]

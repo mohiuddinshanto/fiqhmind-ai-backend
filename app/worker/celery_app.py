@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 
 from app.core.config import Settings, get_settings
 
@@ -24,6 +25,12 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
             "app.tasks.ingestion.extract_*": {"queue": "extract"},
             "app.tasks.ingestion.embed_*": {"queue": "embed"},
             "app.tasks.ingestion.index_*": {"queue": "index"},
+        },
+        beat_schedule={
+            "daily-cache-eviction": {
+                "task": "app.tasks.maintenance.evict_caches",
+                "schedule": crontab(hour=3, minute=0),
+            },
         },
         broker_connection_retry_on_startup=True,
     )

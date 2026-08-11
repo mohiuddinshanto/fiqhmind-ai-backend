@@ -158,7 +158,7 @@ def test_search_forwards_filters_and_top_n(client: TestClient, monkeypatch) -> N
     captured = {}
 
     class FakeRunner:
-        def __init__(self, session, store) -> None:
+        def __init__(self, session, store, **kwargs) -> None:
             self.session = session
             self.store = store
 

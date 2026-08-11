@@ -23,6 +23,10 @@ class FakeHybrid:
         self.calls.append((query, limit, filters))
         return self.hits
 
+    async def search_async(self, query: str, *, limit: int, filters: PayloadFilter | None = None):
+        self.calls.append((query, limit, filters))
+        return self.hits
+
 
 class StubReranker:
     """Returns a fixed score list, recording the queries it saw."""

@@ -17,11 +17,12 @@ import hashlib
 import re
 from dataclasses import dataclass
 from math import sqrt
-from typing import Protocol
+from typing import Any, Protocol
 
 import structlog
 
 from app.core.config import Settings, get_settings
+from app.services.cache import CacheService
 
 logger = structlog.get_logger(__name__)
 
@@ -51,6 +52,7 @@ class Embedder(Protocol):
     """Port implemented by every embedding adapter (deterministic, BGE-M3…)."""
 
     def embed(self, text: str) -> Embedding: ...
+    def embed_batch(self, texts: list[str]) -> list[Embedding]: ...
 
 
 def _hash_index(token: str, mod: int) -> int:
@@ -91,6 +93,117 @@ class DeterministicEmbedder:
         indices = sorted(counts)
         values = [float(counts[index]) for index in indices]
         return Embedding(dense=dense, sparse=SparseEmbedding(indices=indices, values=values))
+
+    def embed_batch(self, texts: list[str]) -> list[Embedding]:
+        """Embed each text, preserving input order (Phase 15 batched embedding)."""
+        return [self.embed(text) for text in texts]
+
+
+_EMBEDDING_CACHE_VERSION = 1
+
+
+def _embedding_cache_key(text: str, *, dim: int) -> str:
+    """Cache key = version + dense dimension + text hash.
+
+    The dimension is part of the key so a change in `qdrant_vector_size` (or a
+    future model swap bumping the version) can never serve a stale-shaped vector.
+    """
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return f"embedding:v{_EMBEDDING_CACHE_VERSION}:{dim}:{digest}"
+
+
+def _embedding_to_json(embedding: Embedding) -> dict[str, Any]:
+    return {
+        "dense": embedding.dense,
+        "sparse": {
+            "indices": embedding.sparse.indices,
+            "values": embedding.sparse.values,
+        },
+    }
+
+
+def _embedding_from_json(payload: dict[str, Any]) -> Embedding:
+    sparse = payload["sparse"]
+    return Embedding(
+        dense=[float(value) for value in payload["dense"]],
+        sparse=SparseEmbedding(
+            indices=[int(index) for index in sparse["indices"]],
+            values=[float(value) for value in sparse["values"]],
+        ),
+    )
+
+
+class CachingEmbedder:
+    """Wraps an `Embedder` with a best-effort vector cache (Phase 15).
+
+    Identical texts embed identically (the deterministic adapter is a pure
+    function), so identical requests — across retrieval and indexing — reuse the
+    cached vector without changing correctness. Cache failures degrade to the
+    wrapped embedder; `embed_batch` preserves input order and only computes the
+    cache misses in that same order.
+    """
+
+    def __init__(
+        self,
+        embedder: Embedder,
+        cache: CacheService,
+        *,
+        ttl_seconds: int,
+        key_dim: int,
+    ) -> None:
+        self._embedder = embedder
+        self._cache = cache
+        self._ttl_seconds = ttl_seconds
+        self._key_dim = key_dim
+
+    def embed(self, text: str) -> Embedding:
+        key = _embedding_cache_key(text, dim=self._key_dim)
+        cached = self._cache.get(key)
+        if cached is not None:
+            return _embedding_from_json(cached)
+        embedding = self._embedder.embed(text)
+        self._cache.set(key, _embedding_to_json(embedding), ttl_seconds=self._ttl_seconds)
+        return embedding
+
+    def embed_batch(self, texts: list[str]) -> list[Embedding]:
+        keys = [_embedding_cache_key(text, dim=self._key_dim) for text in texts]
+        results: list[Embedding | None] = [None] * len(texts)
+        to_compute: list[tuple[int, str]] = []
+        for index, key in enumerate(keys):
+            cached = self._cache.get(key)
+            if cached is not None:
+                results[index] = _embedding_from_json(cached)
+            else:
+                to_compute.append((index, texts[index]))
+
+        if to_compute:
+            computed = self._embedder.embed_batch([text for _, text in to_compute])
+            for (index, text), embedding in zip(to_compute, computed):
+                results[index] = embedding
+                self._cache.set(
+                    keys[index], _embedding_to_json(embedding), ttl_seconds=self._ttl_seconds
+                )
+
+        embeddings = [result for result in results if result is not None]
+        if len(embeddings) != len(texts):  # pragma: no cover - defensive
+            raise RuntimeError("cached embedder produced an incomplete batch")
+        return embeddings
+
+
+def build_cached_embedder(
+    embedder: Embedder,
+    cache: CacheService,
+    settings: Settings | None = None,
+) -> CachingEmbedder:
+    """Wrap `embedder` in the Phase 15 vector cache using application settings."""
+    resolved = settings or get_settings()
+    key_dim = int(getattr(embedder, "dim", resolved.qdrant_vector_size))
+    return CachingEmbedder(
+        embedder,
+        cache,
+        ttl_seconds=resolved.cache_embedding_ttl_seconds,
+        key_dim=key_dim,
+    )
 
 
 def get_embedder(settings: Settings | None = None) -> Embedder:
