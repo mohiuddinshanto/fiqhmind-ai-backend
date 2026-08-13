@@ -92,6 +92,29 @@ class QdrantStore:
             points_selector=models.FilterSelector(filter=filter_),
         )
 
+    def list_point_ids(self, *, limit: int = 1000) -> list[str]:
+        """Page through every point id in the collection (weekly index health).
+
+        Orphan/duplicate detection compares the Qdrant point set against the
+        Postgres `chunks` table, so the store exposes a full id scroll. Qdrant
+        scroll returns `(records, next_page_offset)`; we keep pulling until the
+        offset comes back `None`.
+        """
+        ids: list[str] = []
+        next_offset: models.ExtendedPointId | None = None
+        while True:
+            records, next_offset = self._client.scroll(
+                collection_name=self._collection,
+                limit=limit,
+                offset=next_offset,
+                with_payload=False,
+                with_vectors=False,
+            )
+            ids.extend(str(record.id) for record in records)
+            if next_offset is None:
+                break
+        return ids
+
     def search_dense(
         self,
         vector: list[float],

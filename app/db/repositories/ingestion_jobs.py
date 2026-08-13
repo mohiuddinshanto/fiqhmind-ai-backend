@@ -100,3 +100,29 @@ class IngestionJobRepository(RepositoryBase[IngestionJob]):
                 .limit(limit)
             )
         )
+
+    def list_active_for_upload(self, upload_id: str) -> list[IngestionJob]:
+        """Queued/in-flight jobs for an upload (what a failed child must fail)."""
+        return list(
+            self._session.scalars(
+                select(IngestionJob)
+                .where(
+                    IngestionJob.upload_id == upload_id,
+                    IngestionJob.status.in_(
+                        (
+                            "uploaded",
+                            "queued",
+                            "processing",
+                            "sanitizing",
+                            "extracting",
+                            "ocr",
+                            "ocr_correcting",
+                            "structuring",
+                            "chunking",
+                            "embedding",
+                        )
+                    ),
+                )
+                .order_by(IngestionJob.created_at.desc())
+            )
+        )

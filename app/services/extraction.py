@@ -5,11 +5,13 @@ fonts, sizes, bounding boxes, images and vector drawings — and preserves all
 coordinates. No OCR, no layout classification, no metadata extraction and no
 chunking: later phases consume these structured rows.
 
-`extract_pdf` is a pure function (no DB). `ExtractionRunner` streams the
-per-page output into PostgreSQL page by page so progress is durable and a
-failed book can resume.
+`extract_pdf` is a pure function (no DB). `ExtractionRunner` parses pages in
+parallel (Phase 15 §713) and streams the per-page output into PostgreSQL so
+progress is durable and a failed book can resume.
 """
 
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -17,6 +19,7 @@ import fitz
 import structlog
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.exceptions import (
     EncryptedPdfError,
     MalformedPdfError,
@@ -24,7 +27,7 @@ from app.core.exceptions import (
     TransientExtractionError,
 )
 from app.core.storage import StorageProvider
-from app.db.models import IngestionJob, Upload
+from app.db.models import IngestionJob, PageExtraction, Upload
 from app.db.repositories import ExtractionRepository
 
 logger = structlog.get_logger(__name__)
@@ -84,9 +87,14 @@ class PageInfo:
     blocks: list[BlockInfo] = field(default_factory=list)
     images: list[ImageInfo] = field(default_factory=list)
     drawings: list[DrawingInfo] = field(default_factory=list)
+    # When set, carries the persisted aggregate instead of deriving it from
+    # `blocks` (used when resuming a book from its Postgres page rows).
+    stored_char_count: int | None = field(default=None, repr=False)
 
     @property
     def char_count(self) -> int:
+        if self.stored_char_count is not None:
+            return self.stored_char_count
         return sum(len(block.text) for block in self.blocks)
 
     @property
@@ -238,15 +246,92 @@ def _extract_drawings(page: fitz.Page) -> list[DrawingInfo]:
     return drawings
 
 
+@dataclass
+class _PageParseResult:
+    """One page's parse outcome: a full `PageInfo` or a failure record."""
+
+    number: int
+    info: PageInfo | None = None
+    error: str | None = None
+    width: float = 0.0
+    height: float = 0.0
+    rotation: int = 0
+
+
+def _partition_pages(page_count: int, workers: int) -> list[list[int]]:
+    """Contiguous, roughly equal slices of page indices — one per worker."""
+    workers = max(1, int(workers))
+    size = max(1, (page_count + workers - 1) // workers)
+    return [list(range(i, min(i + size, page_count))) for i in range(0, page_count, size)]
+
+
+def _extract_page_slice(
+    path: str,
+    page_indices: list[int],
+    parse_fn: Callable[[fitz.Page, int], PageInfo],
+) -> list[_PageParseResult]:
+    """Parse a contiguous slice of pages in a worker thread (its own document).
+
+    PyMuPDF documents are not thread-safe (Phase 15 §713 page-level parallel
+    extraction), so each worker opens its own document. Per-page parse failures
+    are captured as `_PageParseResult` error records so one broken page never
+    aborts the book; the document itself uses the same `_open_pdf` guards.
+    """
+    document = _open_pdf(path)
+    try:
+        results: list[_PageParseResult] = []
+        for page_index in page_indices:
+            page = document.load_page(page_index)
+            rect = page.rect
+            try:
+                info = parse_fn(page, page_index + 1)
+                results.append(_PageParseResult(number=page_index + 1, info=info))
+            except Exception as exc:  # noqa: BLE001 - per-page failure is recorded
+                results.append(
+                    _PageParseResult(
+                        number=page_index + 1,
+                        error=str(exc),
+                        width=rect.width,
+                        height=rect.height,
+                        rotation=int(page.rotation),
+                    )
+                )
+        return results
+    finally:
+        document.close()
+
+
 class ExtractionRunner:
-    """Streams a PDF's extracted pages into PostgreSQL, updating job progress."""
+    """Streams a PDF's extracted pages into PostgreSQL, updating job progress.
+
+    Pages are parsed in parallel (a thread pool whose workers each open their
+    own PyMuPDF document) while rows are persisted by the calling thread in
+    page order, so `page_number` ordering and progress stay deterministic.
+
+    Checkpointing (Phase 15 §Batch processing): page rows are committed every
+    `checkpoint_pages` pages, so a crash loses at most one checkpoint window.
+    `run()` is resumable — already-persisted page numbers for the job are
+    skipped, letting a retried task continue mid-book instead of restarting.
+    """
 
     def __init__(
-        self, session: Session, storage: StorageProvider, *, max_pages: int | None = None
+        self,
+        session: Session,
+        storage: StorageProvider,
+        *,
+        max_pages: int | None = None,
+        max_workers: int | None = None,
+        checkpoint_pages: int | None = None,
+        parse_fn: Callable[[fitz.Page, int], PageInfo] | None = None,
     ) -> None:
         self._session = session
         self._storage = storage
         self._max_pages = max_pages
+        self._max_workers = max(1, int(max_workers or get_settings().extraction_workers))
+        self._checkpoint_pages = max(
+            1, int(checkpoint_pages or get_settings().extraction_checkpoint_pages)
+        )
+        self._parse_fn = parse_fn
         self._repo = ExtractionRepository(session)
 
     def run(self, job: IngestionJob, upload: Upload) -> PdfExtraction:
@@ -255,24 +340,51 @@ class ExtractionRunner:
         path = self._storage.resolve(upload.storage_path or "")
         document = _open_pdf(path)
         _guard_page_count(document.page_count, self._max_pages)
+        total = document.page_count
+        document.close()
 
-        upload.page_count = document.page_count
-        self._session.commit()
+        upload.page_count = total
 
         try:
-            extraction = PdfExtraction(page_count=document.page_count)
-            for page_index in range(document.page_count):
-                page_info = self._extract_one_page(document, page_index, job, upload)
-                extraction.pages.append(page_info)
-                progress = round(((page_index + 1) / document.page_count) * 100)
-                job.progress_percent = progress
+            extraction = PdfExtraction(page_count=total)
+            parse_fn = self._parse_fn or _parse_page
+            persisted_rows = self._repo.list_pages(job.id)
+            persisted = {row.page_number for row in persisted_rows}
+            missing = [number - 1 for number in range(1, total + 1) if number not in persisted]
+            done = len(persisted)
+            job.progress_percent = round(done / total * 100) if total else 100
+            self._session.commit()
+
+            slices = _partition_pages(len(missing), self._max_workers)
+            slices = [[missing[index] for index in slice_] for slice_ in slices]
+            with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
+                futures = [
+                    pool.submit(_extract_page_slice, path, indices, parse_fn)
+                    for indices in slices
+                ]
+                since_checkpoint = 0
+                for future in futures:
+                    for result in future.result():
+                        extraction.pages.append(self._persist_result(job, result))
+                        done += 1
+                        since_checkpoint += 1
+                        job.progress_percent = round(done / total * 100) if total else 100
+                        if since_checkpoint >= self._checkpoint_pages:
+                            self._session.commit()
+                            since_checkpoint = 0
                 self._session.commit()
+
+            if persisted_rows:
+                # Resume: merge the already-persisted pages (reconstructed from
+                # their rows) with the newly parsed ones, in page order.
+                by_number = {page.number: page for page in extraction.pages}
+                for row in persisted_rows:
+                    by_number.setdefault(row.page_number, _row_to_page_info(row))
+                extraction.pages = [by_number[number] for number in sorted(by_number)]
             return extraction
         except TransientExtractionError:
             self._session.rollback()
             raise
-        finally:
-            document.close()
 
     def _begin(self, job: IngestionJob, upload: Upload) -> None:
         if not upload.storage_path or not self._storage.exists(upload.storage_path):
@@ -284,24 +396,12 @@ class ExtractionRunner:
         upload.status = "processing"
         self._session.commit()
 
-    def _extract_one_page(
-        self,
-        document: fitz.Document,
-        page_index: int,
-        job: IngestionJob,
-        upload: Upload,
-    ) -> PageInfo:
-        page_number = page_index + 1
-        page = document.load_page(page_index)
-        try:
-            page_info = _parse_page(page, page_number)
-        except Exception as exc:
-            logger.warning(
-                "page_extraction_failed", job_id=job.id, page_number=page_number, error=str(exc)
-            )
-            page_info = self._record_failed_page(job, page_number, page, str(exc))
-            return page_info
+    def _persist_result(self, job: IngestionJob, result: _PageParseResult) -> PageInfo:
+        if result.info is not None:
+            return self._persist_page(job, result.number, result.info)
+        return self._persist_failed_page(job, result)
 
+    def _persist_page(self, job: IngestionJob, page_number: int, page_info: PageInfo) -> PageInfo:
         page_row = self._repo.create_page(
             job_id=job.id,
             page_number=page_number,
@@ -354,29 +454,26 @@ class ExtractionRunner:
             )
         return page_info
 
-    def _record_failed_page(
-        self, job: IngestionJob, page_number: int, page: fitz.Page, error: str
-    ) -> PageInfo:
-        rect = page.rect
+    def _persist_failed_page(self, job: IngestionJob, result: _PageParseResult) -> PageInfo:
         self._repo.create_page(
             job_id=job.id,
-            page_number=page_number,
-            width=rect.width,
-            height=rect.height,
-            rotation=int(page.rotation),
+            page_number=result.number,
+            width=result.width,
+            height=result.height,
+            rotation=result.rotation,
             has_text=False,
             char_count=0,
             block_count=0,
             image_count=0,
             drawing_count=0,
             confidence=0.0,
-            error_message=error,
+            error_message=result.error,
         )
         return PageInfo(
-            number=page_number,
-            width=rect.width,
-            height=rect.height,
-            rotation=int(page.rotation),
+            number=result.number,
+            width=result.width,
+            height=result.height,
+            rotation=result.rotation,
         )
 
 
@@ -390,4 +487,21 @@ def _parse_page(page: fitz.Page, page_number: int) -> PageInfo:
         blocks=_extract_blocks(page),
         images=_extract_images(page),
         drawings=_extract_drawings(page),
+    )
+
+
+def _row_to_page_info(row: PageExtraction) -> PageInfo:
+    """Reconstruct a `PageInfo` from a persisted `PageExtraction` row (resume).
+
+    Only the summary aggregates are preserved in the row (char/text counts and
+    geometry); the block/spans/images/drawings detail lives in child tables and
+    is re-readable from the DB when needed, so the returned `PageInfo` carries
+    the stored char count instead of a block list.
+    """
+    return PageInfo(
+        number=row.page_number,
+        width=row.width,
+        height=row.height,
+        rotation=row.rotation,
+        stored_char_count=row.char_count,
     )

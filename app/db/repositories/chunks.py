@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from app.db.models import Chunk, Page
 from app.db.repositories.base import RepositoryBase
@@ -27,6 +27,33 @@ class ChunkRepository(RepositoryBase[Chunk]):
                 .limit(limit)
             )
         )
+
+    def list_all_by_job(self, job_id: str) -> list[Chunk]:
+        """Every chunk of a job in order, no limit (indexing needs the full set)."""
+        return list(
+            self._session.scalars(
+                select(Chunk).where(Chunk.job_id == job_id).order_by(Chunk.order_index)
+            )
+        )
+
+    def list_all_ids(self) -> list[str]:
+        """Every chunk_id in the corpus (weekly index health orphan detection)."""
+        return list(self._session.scalars(select(Chunk.chunk_id)))
+
+    def list_duplicate_normalized_texts(self) -> list[tuple[str, int]]:
+        """Normalized texts that appear in more than one chunk (duplicate detection).
+
+        `chunk_id` is content-addressed (sha256 of the normalized text), so a
+        duplicate row means the same passage was chunked twice — typically a
+        stale chunking run that `save_for_job` did not fully replace.
+        """
+        rows = self._session.execute(
+            select(Chunk.normalized_text, func.count(Chunk.chunk_id))
+            .where(Chunk.normalized_text.is_not(None))
+            .group_by(Chunk.normalized_text)
+            .having(func.count(Chunk.chunk_id) > 1)
+        ).all()
+        return [(text, int(count)) for text, count in rows]
 
     def list_by_book(self, book_id: str, *, skip: int = 0, limit: int = 100) -> list[Chunk]:
         return list(

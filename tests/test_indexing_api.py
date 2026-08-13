@@ -38,7 +38,7 @@ class FakeTask:
 def _no_celery(monkeypatch) -> FakeTask:
     task = FakeTask()
     monkeypatch.setattr(uploads_module, "mark_queued", task)
-    monkeypatch.setattr(indexing_endpoints, "run_indexing_task", task)
+    monkeypatch.setattr(indexing_endpoints, "process_book_task", task)
     return task
 
 
@@ -170,7 +170,10 @@ def test_start_indexing_dispatches_worker(
 
     response = client.post(f"/api/v1/indexing/{upload_id}")
     body = response.json()
-    assert _no_celery.calls[-1] == ((body["job_id"], upload_id, chunk_job.id), {})
+    assert _no_celery.calls[-1] == (
+        (upload_id,),
+        {"stage": "indexing", "job_id": body["job_id"], "chunking_job_id": chunk_job.id},
+    )
 
 
 def test_start_indexing_missing_upload_returns_404(client: TestClient) -> None:

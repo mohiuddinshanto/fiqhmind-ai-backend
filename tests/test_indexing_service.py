@@ -1,5 +1,6 @@
 """Tests for the Phase 8 IndexingRunner (DB streaming → Qdrant) and its Celery task."""
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ from app.core.exceptions import IndexConflictError
 from app.core.qdrant import SPARSE_VECTOR_NAME
 from app.core.storage import LocalStorageProvider
 from app.db.base import Base
-from app.db.models import IngestionJob, Upload
+from app.db.models import Chunk, IngestionJob, Upload
 from app.db.repositories import (
     ChunkRepository,
     IngestionJobRepository,
@@ -388,3 +389,63 @@ def test_indexing_task_fails_permanently_without_chunks(
     assert "chunking" in done_job.error_message
     assert any(error.step == "indexing" for error in done_job.errors)
     assert done_upload.status == "failed"
+
+
+def test_runner_embeds_default_128_batches_until_remainder(
+    session: Session, tmp_path
+) -> None:
+    """260 chunks are embedded as 128 / 128 / 4 using config.embedding_batch_size."""
+    upload = UploadRepository(session).create(
+        Upload(
+            original_filename="big.pdf",
+            filename="big.pdf",
+            storage_path="big.pdf",
+            mime="application/pdf",
+            status="processing",
+            page_count=260,
+        )
+    )
+    chunk_job = IngestionJobRepository(session).create(
+        IngestionJob(upload_id=upload.id, kind="chunking", status="completed")
+    )
+    metadata_job = IngestionJobRepository(session).create(
+        IngestionJob(upload_id=upload.id, kind="metadata", status="completed")
+    )
+    MetadataRepository(session).create_document(
+        job_id=metadata_job.id,
+        upload_id=upload.id,
+        original_filename="big.pdf",
+        page_count=260,
+        numbering_system="arabic",
+        confidence=1.0,
+    )
+    for index in range(260):
+        session.add(
+            Chunk(
+                chunk_id=hashlib.sha256(f"text-{index}".encode()).hexdigest(),
+                job_id=chunk_job.id,
+                order_index=index,
+                region="main",
+                lang="ar",
+                raw_text=f"text-{index}",
+                token_count=1,
+            )
+        )
+    session.commit()
+    session.expire_all()
+
+    index_job = _index_job(session, upload)
+    store = FakeStore()
+    embedder = RecordingEmbedder()
+
+    IndexingRunner(session, store, embedder=embedder).run(
+        index_job, upload, chunking_job_id=chunk_job.id
+    )
+
+    # Not 260 single-text calls: the config default (128) groups them.
+    assert embedder.batch_sizes == [128, 128, 4]
+    chunks = ChunkRepository(session).list_all_by_job(chunk_job.id)
+    assert embedder.texts == [chunk.raw_text for chunk in chunks]
+    points = [point for batch in store.upsert_batches for point in batch]
+    assert len(points) == 260
+    assert [point.id for point in points] == [chunk.chunk_id for chunk in chunks]

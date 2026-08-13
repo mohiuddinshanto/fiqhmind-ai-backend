@@ -1,0 +1,274 @@
+"""Phase 15 M4 per-book task-graph tests (requirements D, E).
+
+Proves the orchestration primitives in `app/tasks/book.py`:
+
+- the per-book chain/group composition
+  `extraction → chunking → group(embed, index)`, and
+- child-failure propagation: a raising leaf fires the `fail_book_jobs`
+  errback, which fails every active job of the book (parent included) and
+  marks the upload failed.
+
+Overlap/ordering of page-level extraction and batched embedding live in
+`test_extraction_concurrency.py` and `test_indexing_service.py`.
+"""
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+import app.tasks.book as book_module
+from app.db.base import Base
+from app.db.models import IngestionJob, Upload
+from app.db.repositories import IngestionJobRepository, UploadRepository
+from app.worker.celery_app import celery_app
+
+
+@pytest.fixture()
+def session() -> Session:
+    engine = create_engine(
+        "sqlite://",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    testing_session = sessionmaker(bind=engine, expire_on_commit=False)
+    yield testing_session()
+    engine.dispose()
+
+
+def _make_upload(session: Session, *, status: str = "queued") -> Upload:
+    return UploadRepository(session).create(
+        Upload(
+            original_filename="kitab.pdf",
+            filename="kitab.pdf",
+            storage_path="kitab.pdf",
+            mime="application/pdf",
+            status=status,
+        )
+    )
+
+
+def _make_job(
+    session: Session, upload_id: str, kind: str, *, status: str = "queued"
+) -> IngestionJob:
+    return IngestionJobRepository(session).create(
+        IngestionJob(upload_id=upload_id, kind=kind, status=status)
+    )
+
+
+def _eager_session_factory(session: Session):
+    """Zero-arg `get_session_factory` returning a fresh sessionmaker (as the app does)."""
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False)
+    return lambda: factory
+
+
+def _errbacks(signature) -> list:
+    wired = signature.options.get("link_error", [])
+    return wired if isinstance(wired, list) else [wired]
+
+
+def _canvas_kind(signature) -> str:
+    """`_chain` / `_group` — Celery 5 `chain()`/`group()` return canvas types."""
+    return type(signature).__name__
+
+
+def test_book_graph_chain_structure() -> None:
+    """The full book graph is extract → chunk → group(embed, index)."""
+    graph = book_module.build_book_graph(
+        extraction_job_id="extraction-id",
+        upload_id="upload-id",
+        chunking_job_id="chunking-id",
+        indexing_job_id="indexing-id",
+        metadata_job_id="metadata-id",
+    )
+
+    assert _canvas_kind(graph) == "_chain"
+    assert [task.task for task in graph.tasks[:2]] == [
+        "app.tasks.ingestion.extract_pdf_task",
+        "app.tasks.ingestion.run_chunking_task",
+    ]
+    assert tuple(graph.tasks[0].args) == ("extraction-id", "upload-id")
+    assert tuple(graph.tasks[1].args) == ("chunking-id", "upload-id", "metadata-id")
+
+    indexing_stage = graph.tasks[2]
+    assert indexing_stage.task == "celery.group"
+    assert {task.task for task in indexing_stage.tasks} == {
+        "app.tasks.ingestion.embed_book_chunks",
+        "app.tasks.ingestion.index_book_chunks",
+    }
+    by_name = {task.task: task for task in indexing_stage.tasks}
+    assert tuple(by_name["app.tasks.ingestion.index_book_chunks"].args) == (
+        "indexing-id",
+        "upload-id",
+        "chunking-id",
+    )
+    assert tuple(by_name["app.tasks.ingestion.embed_book_chunks"].args) == (
+        "upload-id",
+        "chunking-id",
+    )
+
+
+def test_stage_graphs_compose_expected_primitives() -> None:
+    """Each endpoint dispatches the right primitive with the right arguments."""
+    extraction = book_module.build_extraction_stage("extraction-id", "upload-id")
+    assert _canvas_kind(extraction) == "chain"
+    assert extraction.tasks[0].task == "app.tasks.ingestion.extract_pdf_task"
+    assert tuple(extraction.tasks[0].args) == ("extraction-id", "upload-id")
+
+    chunking = book_module.build_chunking_stage("chunking-id", "upload-id", "metadata-id")
+    assert _canvas_kind(chunking) == "chain"
+    assert chunking.tasks[0].task == "app.tasks.ingestion.run_chunking_task"
+    assert tuple(chunking.tasks[0].args) == ("chunking-id", "upload-id", "metadata-id")
+
+    indexing = book_module.build_indexing_stage("indexing-id", "upload-id", "chunking-id")
+    assert _canvas_kind(indexing) == "group"
+    by_name = {task.task: task for task in indexing.tasks}
+    assert set(by_name) == {
+        "app.tasks.ingestion.embed_book_chunks",
+        "app.tasks.ingestion.index_book_chunks",
+    }
+    assert tuple(by_name["app.tasks.ingestion.index_book_chunks"].args) == (
+        "indexing-id",
+        "upload-id",
+        "chunking-id",
+    )
+    assert tuple(by_name["app.tasks.ingestion.embed_book_chunks"].args) == (
+        "upload-id",
+        "chunking-id",
+    )
+
+
+def test_stage_graphs_wire_child_failure_errback() -> None:
+    """Every leaf links its failure to fail_book_jobs with the stage's job id."""
+    cases = [
+        (book_module.build_extraction_stage("e", "u"), "e"),
+        (book_module.build_chunking_stage("c", "u", "m"), "c"),
+    ]
+    for graph, job_id in cases:
+        (errback,) = _errbacks(graph.tasks[0])
+        assert errback.task == "app.tasks.book.fail_book_jobs"
+        assert errback.kwargs == {"upload_id": "u", "failed_job_id": job_id}
+
+    indexing = book_module.build_indexing_stage("i", "u", "c")
+    for task in indexing.tasks:
+        (errback,) = _errbacks(task)
+        assert errback.task == "app.tasks.book.fail_book_jobs"
+        assert errback.kwargs == {"upload_id": "u", "failed_job_id": "i"}
+
+
+def test_build_stage_graph_unknown_stage_raises() -> None:
+    with pytest.raises(ValueError):
+        book_module.build_stage_graph("nope", job_id="j", upload_id="u")
+
+
+def test_fail_book_jobs_fails_active_siblings_and_upload(session: Session, monkeypatch) -> None:
+    """A failed child fails the parent and every other in-flight job + the upload."""
+    upload = _make_upload(session)
+    extraction = _make_job(session, upload.id, "extraction", status="extracting")
+    chunking = _make_job(session, upload.id, "chunking", status="queued")
+    indexing = _make_job(session, upload.id, "indexing", status="queued")
+    metadata = _make_job(session, upload.id, "metadata", status="completed")
+    session.commit()
+
+    monkeypatch.setattr(book_module, "get_session_factory", _eager_session_factory(session))
+
+    book_module.fail_book_jobs.run(
+        ("request", RuntimeError("boom"), "traceback"),
+        upload_id=upload.id,
+        failed_job_id=extraction.id,
+    )
+    session.expire_all()
+
+    repo = IngestionJobRepository(session)
+    assert repo.get(extraction.id).status == "failed"
+    assert repo.get(chunking.id).status == "failed"
+    assert repo.get(indexing.id).status == "failed"
+    assert repo.get(metadata.id).status == "completed"  # terminal jobs are untouched
+    assert repo.get(extraction.id).error_message == (
+        f"ingestion pipeline failed upstream (job {extraction.id})"
+    )
+
+    failed_upload = UploadRepository(session).get(upload.id)
+    assert failed_upload.status == "failed"
+    assert "failed upstream" in failed_upload.error_message
+
+
+def test_raising_leaf_fires_errback_and_fails_book(session: Session, monkeypatch) -> None:
+    """A raising leaf in the orchestrated graph fails the parent + siblings + upload."""
+    upload = _make_upload(session)
+    extraction = _make_job(session, upload.id, "extraction", status="queued")
+    chunking = _make_job(session, upload.id, "chunking", status="queued")
+    session.commit()
+
+    monkeypatch.setattr(book_module, "get_session_factory", _eager_session_factory(session))
+
+    @celery_app.task(name="app.tasks.book.test_raising_leaf")
+    def raising_leaf(*args, **kwargs) -> None:
+        raise RuntimeError("child exploded")
+
+    monkeypatch.setattr(book_module, "extract_pdf_task", raising_leaf)
+
+    celery_app.conf.task_always_eager = True
+    try:
+        book_module.build_extraction_stage(extraction.id, upload.id).apply_async()
+    finally:
+        celery_app.conf.task_always_eager = False
+
+    session.expire_all()
+    repo = IngestionJobRepository(session)
+    assert repo.get(extraction.id).status == "failed"
+    assert repo.get(chunking.id).status == "failed"
+    assert UploadRepository(session).get(upload.id).status == "failed"
+
+
+def test_process_book_task_dispatches_stage_graph(session: Session, monkeypatch) -> None:
+    """The endpoint entry point applies the stage graph it was asked for."""
+    upload = _make_upload(session)
+    job = _make_job(session, upload.id, "extraction", status="queued")
+    session.commit()
+
+    applied: list[tuple] = []
+
+    class FakeGraph:
+        def apply_async(self, *args, **kwargs) -> None:
+            applied.append((args, kwargs))
+
+    def build_stage_graph(stage, **kwargs):
+        assert stage == "extraction"
+        assert kwargs["job_id"] == job.id
+        assert kwargs["upload_id"] == upload.id
+        return FakeGraph()
+
+    monkeypatch.setattr(book_module, "build_stage_graph", build_stage_graph)
+    monkeypatch.setattr(book_module, "get_session_factory", _eager_session_factory(session))
+
+    celery_app.conf.task_always_eager = True
+    try:
+        book_module.process_book_task.delay(upload.id, stage="extraction", job_id=job.id)
+    finally:
+        celery_app.conf.task_always_eager = False
+
+    assert len(applied) == 1
+
+
+def test_process_book_task_skips_unknown_upload(session: Session, monkeypatch) -> None:
+    """A missing upload must not dispatch anything (and must not duplicate jobs)."""
+    applied: list[tuple] = []
+
+    def boom_graph(*args, **kwargs):  # pragma: no cover - must not be reached
+        raise AssertionError("graph built for a missing upload")
+
+    monkeypatch.setattr(book_module, "build_stage_graph", boom_graph)
+    monkeypatch.setattr(book_module, "get_session_factory", _eager_session_factory(session))
+
+    celery_app.conf.task_always_eager = True
+    try:
+        book_module.process_book_task.delay(
+            "00000000000000000000000000000000", stage="extraction", job_id="j"
+        )
+    finally:
+        celery_app.conf.task_always_eager = False
+
+    assert applied == []
+    assert len(IngestionJobRepository(session).get_multi()) == 0

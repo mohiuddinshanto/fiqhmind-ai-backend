@@ -170,7 +170,9 @@ class IndexingRunner:
                 upload.id, "chunking"
             )
             chunking_job_id = chunking_job.id if chunking_job else None
-        chunks = self._chunk_repo.list_by_job(chunking_job_id) if chunking_job_id else []
+        chunks = (
+            self._chunk_repo.list_all_by_job(chunking_job_id) if chunking_job_id else []
+        )
         if not chunks:
             raise IndexConflictError(
                 "indexing requires a completed chunking job with chunks (no chunks found)"

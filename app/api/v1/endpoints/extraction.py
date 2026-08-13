@@ -13,7 +13,7 @@ from app.schemas.extraction import (
     ExtractionStartResponse,
     ExtractionStatusResponse,
 )
-from app.tasks.ingestion import extract_pdf_task
+from app.tasks.book import process_book_task
 
 logger = structlog.get_logger(__name__)
 
@@ -71,7 +71,7 @@ def start_extraction(
     session.commit()
 
     try:
-        extract_pdf_task.delay(job.id, upload.id)
+        process_book_task.delay(upload.id, stage="extraction", job_id=job.id)
     except Exception:  # noqa: BLE001 - job row survives for later reconciliation
         logger.warning("extraction_dispatch_failed", job_id=job.id, upload_id=upload.id)
 

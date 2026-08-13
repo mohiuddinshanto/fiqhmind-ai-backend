@@ -4,7 +4,7 @@ import base64
 import hashlib
 from pathlib import Path
 
-import fitz  # type: ignore[import-not-found]
+import fitz
 
 _1X1_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="

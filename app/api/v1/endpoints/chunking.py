@@ -16,7 +16,7 @@ from app.schemas.chunking import (
     ChunkStartResponse,
     ChunkStatusResponse,
 )
-from app.tasks.ingestion import run_chunking_task
+from app.tasks.book import process_book_task
 
 logger = structlog.get_logger(__name__)
 
@@ -85,7 +85,12 @@ def start_chunking(upload_id: str, session: DbSession) -> ChunkStartResponse:
     session.commit()
 
     try:
-        run_chunking_task.delay(job.id, upload.id, metadata_job.id)
+        process_book_task.delay(
+            upload.id,
+            stage="chunking",
+            job_id=job.id,
+            metadata_job_id=metadata_job.id,
+        )
     except Exception:  # noqa: BLE001 - job row survives for later reconciliation
         logger.warning("chunking_dispatch_failed", job_id=job.id, upload_id=upload.id)
 

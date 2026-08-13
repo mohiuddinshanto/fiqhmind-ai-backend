@@ -25,11 +25,20 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
             "app.tasks.ingestion.extract_*": {"queue": "extract"},
             "app.tasks.ingestion.embed_*": {"queue": "embed"},
             "app.tasks.ingestion.index_*": {"queue": "index"},
+            "app.tasks.maintenance.*": {"queue": "maintenance"},
         },
         beat_schedule={
             "daily-cache-eviction": {
                 "task": "app.tasks.maintenance.evict_caches",
                 "schedule": crontab(hour=3, minute=0),
+            },
+            "daily-provider-health-check": {
+                "task": "app.tasks.maintenance.provider_health_check",
+                "schedule": crontab(hour=4, minute=0),
+            },
+            "weekly-index-health-check": {
+                "task": "app.tasks.maintenance.index_health_check",
+                "schedule": crontab(day_of_week=1, hour=5, minute=0),
             },
         },
         broker_connection_retry_on_startup=True,

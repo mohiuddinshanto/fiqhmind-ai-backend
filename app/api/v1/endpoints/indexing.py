@@ -14,7 +14,7 @@ from app.schemas.indexing import (
     IndexStartResponse,
     IndexStatusResponse,
 )
-from app.tasks.ingestion import run_indexing_task
+from app.tasks.book import process_book_task
 
 logger = structlog.get_logger(__name__)
 
@@ -76,7 +76,12 @@ def start_indexing(upload_id: str, session: DbSession) -> IndexStartResponse:
     session.commit()
 
     try:
-        run_indexing_task.delay(job.id, upload.id, chunking_job.id)
+        process_book_task.delay(
+            upload.id,
+            stage="indexing",
+            job_id=job.id,
+            chunking_job_id=chunking_job.id,
+        )
     except Exception:  # noqa: BLE001 - job row survives for later reconciliation
         logger.warning("indexing_dispatch_failed", job_id=job.id, upload_id=upload.id)
 

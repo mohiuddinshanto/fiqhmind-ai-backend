@@ -6,8 +6,10 @@ extraction worker (`extract_pdf_task`). Phase 5 adds the layout worker
 which extracts bibliographic/structural metadata and the page mapping.
 Phase 7 adds the chunking worker (`run_chunking_task`) which turns that
 metadata + page mapping into structure-aware, page-anchored chunks.
-Phase 8 adds the indexing worker (`run_indexing_task`) which embeds and
-upserts those chunks into the Qdrant vector store.
+Phase 8 adds the indexing worker (`index_book_chunks`, alias
+`run_indexing_task`) which embeds and upserts those chunks into the Qdrant
+vector store, plus `embed_book_chunks` (Phase 15 §713) which pre-warms the
+embedding cache on the `embed` worker pool.
 """
 
 import structlog
@@ -26,9 +28,10 @@ from app.core.qdrant import get_qdrant_store
 from app.core.redis import get_redis
 from app.core.storage import get_storage_provider
 from app.db.models import IngestionJob, Upload
-from app.db.repositories import IngestionJobRepository, UploadRepository
+from app.db.repositories import ChunkRepository, IngestionJobRepository, UploadRepository
 from app.services.cache import CacheService
 from app.services.chunking import ChunkRunner
+from app.services.embedding import build_cached_embedder, get_embedder
 from app.services.extraction import ExtractionRunner
 from app.services.indexing import IndexingRunner
 from app.services.layout import LayoutRunner
@@ -236,14 +239,14 @@ def _retry_countdown(retries: int) -> int:
 
 
 @celery_app.task(
-    name="app.tasks.ingestion.run_indexing_task",
+    name="app.tasks.ingestion.index_book_chunks",
     bind=True,
     max_retries=MAX_RETRIES,
     retry_backoff=True,
     retry_backoff_max=120,
     retry_jitter=True,
 )
-def run_indexing_task(self, job_id: str, upload_id: str, chunking_job_id: str) -> None:
+def index_book_chunks(self, job_id: str, upload_id: str, chunking_job_id: str) -> None:
     """Run Phase 8 vector indexing: embed + upsert chunks into Qdrant.
 
     Indexing depends on the Qdrant store and the configured embedder, so most
@@ -296,6 +299,57 @@ def run_indexing_task(self, job_id: str, upload_id: str, chunking_job_id: str) -
             raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
         _record_error_and_fail(session, job, upload, str(exc), step="indexing", permanent=True)
         logger.warning("indexing_retries_exhausted", job_id=job_id, error=str(exc))
+    finally:
+        session.close()
+
+
+# Backwards-compatible alias: the task's registered name is now
+# `app.tasks.ingestion.index_book_chunks` so it matches the `index_*` → queue
+# route in `celery_app.py` (Phase 15 §713 separate worker pools).
+run_indexing_task = index_book_chunks
+
+
+@celery_app.task(name="app.tasks.ingestion.embed_book_chunks")
+def embed_chunks_task(upload_id: str, chunking_job_id: str) -> None:
+    """Pre-embed a chunking job's chunks in `embedding_batch_size` batches.
+
+    Best-effort cache warming on the `embed` worker pool (Phase 15 §713): the
+    authoritative embed happens inside `index_book_chunks` through the cached
+    embedder, so a parallel warm run lets indexing reuse the vectors. Because
+    `CacheService` fails open, a warm miss costs nothing and this task is never
+    retried.
+    """
+    session = get_session_factory()()
+    try:
+        settings = get_settings()
+        chunking_job = IngestionJobRepository(session).get(chunking_job_id)
+        if chunking_job is None:
+            logger.warning(
+                "embed_chunking_job_missing",
+                upload_id=upload_id,
+                chunking_job_id=chunking_job_id,
+            )
+            return
+        chunks = ChunkRepository(session).list_all_by_job(chunking_job_id)
+        if not chunks:
+            logger.warning(
+                "embed_no_chunks", upload_id=upload_id, chunking_job_id=chunking_job_id
+            )
+            return
+        embedder = build_cached_embedder(
+            get_embedder(settings), CacheService(get_redis()), settings
+        )
+        batch_size = max(int(settings.embedding_batch_size), 1)
+        for start in range(0, len(chunks), batch_size):
+            batch = chunks[start : start + batch_size]
+            embedder.embed_batch([chunk.raw_text for chunk in batch])
+        logger.info(
+            "embed_book_chunks_completed",
+            upload_id=upload_id,
+            chunking_job_id=chunking_job_id,
+            chunk_count=len(chunks),
+            batch_size=batch_size,
+        )
     finally:
         session.close()
 

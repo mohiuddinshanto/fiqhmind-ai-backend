@@ -36,7 +36,7 @@ class FakeTask:
 def _no_celery(monkeypatch) -> FakeTask:
     task = FakeTask()
     monkeypatch.setattr(uploads_module, "mark_queued", task)
-    monkeypatch.setattr(extraction_endpoints, "extract_pdf_task", task)
+    monkeypatch.setattr(extraction_endpoints, "process_book_task", task)
     return task
 
 
@@ -138,7 +138,10 @@ def test_start_extraction_dispatches_worker(
 
     response = client.post(f"/api/v1/extraction/{upload_id}")
     body = response.json()
-    assert _no_celery.calls[-1] == ((body["job_id"], upload_id), {})
+    assert _no_celery.calls[-1] == (
+        (upload_id,),
+        {"stage": "extraction", "job_id": body["job_id"]},
+    )
 
 
 def test_start_extraction_missing_upload_returns_404(client: TestClient) -> None:

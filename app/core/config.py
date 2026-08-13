@@ -110,6 +110,13 @@ class Settings(BaseSettings):
     upload_storage_provider: str = "local"  # local | r2 (r2 lands in a later phase)
     upload_max_size_bytes: int = 200 * 1024 * 1024  # ARCHITECTURE.md: 200 MB cap
     upload_max_pages: int = 2000  # decompression-bomb guard: reject oversized PDFs
+    # Page-level parallel extraction (Phase 15 §713): worker threads each open
+    # their own PyMuPDF document and parse a contiguous slice of pages.
+    extraction_workers: int = 4
+    # Checkpoint granularity for crash-resumable extraction (Phase 15 §Batch
+    # processing): page rows are committed to Postgres every N pages, so a
+    # failed run resumes mid-book from the last durable checkpoint.
+    extraction_checkpoint_pages: int = 25
     upload_allowed_mime: str = "application/pdf"
     upload_chunk_size: int = 64 * 1024  # streaming read chunk, never buffer whole files
     upload_max_files_per_request: int = 20

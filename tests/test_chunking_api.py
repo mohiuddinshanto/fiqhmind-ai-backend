@@ -37,7 +37,7 @@ class FakeTask:
 def _no_celery(monkeypatch) -> FakeTask:
     task = FakeTask()
     monkeypatch.setattr(uploads_module, "mark_queued", task)
-    monkeypatch.setattr(chunking_endpoints, "run_chunking_task", task)
+    monkeypatch.setattr(chunking_endpoints, "process_book_task", task)
     return task
 
 
@@ -160,7 +160,14 @@ def test_start_chunking_dispatches_worker(
 
     response = client.post(f"/api/v1/chunking/{upload_id}")
     body = response.json()
-    assert _no_celery.calls[-1] == ((body["job_id"], upload_id, metadata_job.id), {})
+    assert _no_celery.calls[-1] == (
+        (upload_id,),
+        {
+            "stage": "chunking",
+            "job_id": body["job_id"],
+            "metadata_job_id": metadata_job.id,
+        },
+    )
 
 
 def test_start_chunking_missing_upload_returns_404(client: TestClient) -> None:
