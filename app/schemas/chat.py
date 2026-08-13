@@ -23,6 +23,13 @@ class ChatRequest(BaseModel):
         default=None, ge=1, le=8, description="Context size; defaults to the configured top-N"
     )
     answer_language: str = Field(default="bn", pattern="^(bn|ar|en)$")
+    # Phase 15 M3: true token streaming. When True, POST /chat streams LLM
+    # tokens as they are produced (`start -> token* -> done | error`) instead of
+    # waiting for the full validated answer. Both modes share the same QA cache.
+    stream: bool = Field(
+        default=False,
+        description="Stream LLM tokens live (true streaming) instead of a post-hoc replay",
+    )
 
 
 class Explanation(BaseModel):

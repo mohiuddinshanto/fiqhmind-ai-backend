@@ -20,7 +20,9 @@ Phase 11 additions:
 """
 
 import asyncio
+import json
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol
@@ -34,6 +36,9 @@ logger = structlog.get_logger(__name__)
 
 _GEMINI_GENERATE_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+)
+_GEMINI_STREAM_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent"
 )
 _GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -256,6 +261,19 @@ class LLMProvider(Protocol):
     def complete(self, *, system_prompt: str, user_prompt: str) -> str: ...
 
 
+class StreamableLLMProvider(Protocol):
+    """The streaming port used by `GenerationService.stream_answer` (Phase 15 M3).
+
+    `stream` yields raw model text chunks as the vendor emits them. For
+    JSON-contract providers the chunks are fragments of the eventual JSON
+    document; the service accumulates, validates, and only then exposes the
+    final answer. A provider that only implements `LLMProvider.complete` is
+    still streamed by the service (the full output is yielded as one chunk).
+    """
+
+    def stream(self, *, system_prompt: str, user_prompt: str) -> Iterator[str]: ...
+
+
 class GeminiProvider:
     """Gemini REST client (text-only, JSON output)."""
 
@@ -306,6 +324,57 @@ class GeminiProvider:
             ) from exc
         return text.strip()
 
+    def stream(self, *, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        """Stream generation content (SSE `streamGenerateContent?alt=sse`)."""
+        url = _GEMINI_STREAM_URL.format(model=self._model)
+        payload = {
+            "contents": [
+                {"role": "user", "parts": [{"text": f"{system_prompt}\n\n{user_prompt}"}]}
+            ],
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": 2048,
+                "responseMimeType": "application/json",
+            },
+        }
+        try:
+            with httpx.Client(timeout=self._timeout) as client:
+                with client.stream(
+                    "POST",
+                    url,
+                    params={"key": self._api_key, "alt": "sse"},
+                    json=payload,
+                ) as response:
+                    if response.status_code == 429:
+                        raise ProviderUnavailableError("gemini rate limited (HTTP 429)")
+                    if response.status_code != 200:
+                        raise ProviderUnavailableError(
+                            f"gemini returned HTTP {response.status_code}: "
+                            f"{response.text[:300]}"
+                        )
+                    for line in response.iter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        raw = line[len("data: ") :].strip()
+                        if not raw or raw == "[DONE]":
+                            continue
+                        try:
+                            obj = json.loads(raw)
+                        except ValueError:
+                            continue
+                        parts = (
+                            obj.get("candidates") or [{}]
+                        )[0].get("content", {}).get("parts", [])
+                        text = "".join(
+                            part.get("text", "")
+                            for part in parts
+                            if isinstance(part, dict)
+                        )
+                        if text:
+                            yield text
+        except httpx.HTTPError as exc:
+            raise ProviderUnavailableError(f"gemini stream failed: {exc}") from exc
+
 
 class GroqProvider:
     """Groq OpenAI-compatible chat client (JSON output)."""
@@ -355,6 +424,50 @@ class GroqProvider:
             ) from exc
         return text.strip()
 
+    def stream(self, *, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        """Stream an OpenAI-compatible chat completion (`stream: true`)."""
+        payload = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.2,
+            "stream": True,
+            "response_format": {"type": "json_object"},
+        }
+        try:
+            with httpx.Client(timeout=self._timeout) as client:
+                with client.stream(
+                    "POST",
+                    _GROQ_CHAT_URL,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    json=payload,
+                ) as response:
+                    if response.status_code == 429:
+                        raise ProviderUnavailableError("groq rate limited (HTTP 429)")
+                    if response.status_code != 200:
+                        raise ProviderUnavailableError(
+                            f"groq returned HTTP {response.status_code}: "
+                            f"{response.text[:300]}"
+                        )
+                    for line in response.iter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        raw = line[len("data: ") :].strip()
+                        if not raw or raw == "[DONE]":
+                            continue
+                        try:
+                            obj = json.loads(raw)
+                        except ValueError:
+                            continue
+                        choice = (obj.get("choices") or [{}])[0]
+                        text = (choice.get("delta") or {}).get("content")
+                        if text:
+                            yield text
+        except httpx.HTTPError as exc:
+            raise ProviderUnavailableError(f"groq stream failed: {exc}") from exc
+
 
 class OpenRouterProvider:
     """OpenRouter OpenAI-compatible client for free-preview models (Phase 11).
@@ -387,6 +500,81 @@ class OpenRouterProvider:
                 last_error = str(exc)
                 logger.warning("openrouter_model_failed", model=model, error=last_error)
         raise ProviderUnavailableError(f"openrouter: all models failed: {last_error or 'unknown'}")
+
+    def stream(self, *, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        """Stream through the rotating free-preview model list.
+
+        Mirrors `complete`: a model that rejects the request before its first
+        token is skipped for the next one; a stream that dies after yielding
+        tokens propagates (partial output cannot be cleanly resumed).
+        """
+        last_error: str | None = None
+        for model in self._models:
+            started = False
+            try:
+                for chunk in self._stream_with_model(
+                    model=model, system_prompt=system_prompt, user_prompt=user_prompt
+                ):
+                    started = True
+                    yield chunk
+                return
+            except ProviderUnavailableError as exc:
+                last_error = str(exc)
+                logger.warning("openrouter_model_stream_failed", model=model, error=last_error)
+                if started:
+                    raise
+        raise ProviderUnavailableError(f"openrouter: all models failed: {last_error or 'unknown'}")
+
+    def _stream_with_model(
+        self, *, model: str, system_prompt: str, user_prompt: str
+    ) -> Iterator[str]:
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.2,
+            "stream": True,
+            "response_format": {"type": "json_object"},
+        }
+        try:
+            with httpx.Client(timeout=self._timeout) as client:
+                with client.stream(
+                    "POST",
+                    _OPENROUTER_CHAT_URL,
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "HTTP-Referer": "https://fiqhmind.ai",
+                        "X-Title": "FiqhMind AI",
+                    },
+                    json=payload,
+                ) as response:
+                    if response.status_code in (429, 401, 403):
+                        raise ProviderUnavailableError(
+                            f"openrouter {model} rejected (HTTP {response.status_code})"
+                        )
+                    if response.status_code != 200:
+                        raise ProviderUnavailableError(
+                            f"openrouter returned HTTP {response.status_code}: "
+                            f"{response.text[:300]}"
+                        )
+                    for line in response.iter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        raw = line[len("data: ") :].strip()
+                        if not raw or raw == "[DONE]":
+                            continue
+                        try:
+                            obj = json.loads(raw)
+                        except ValueError:
+                            continue
+                        choice = (obj.get("choices") or [{}])[0]
+                        text = (choice.get("delta") or {}).get("content")
+                        if text:
+                            yield text
+        except httpx.HTTPError as exc:
+            raise ProviderUnavailableError(f"openrouter request failed: {exc}") from exc
 
     def _complete_with_model(self, *, model: str, system_prompt: str, user_prompt: str) -> str:
         payload = {
@@ -562,6 +750,15 @@ class ProviderHealthService:
     async def start_health_checks(self) -> asyncio.Task[None]:
         """Start background health checks for all providers."""
         return asyncio.create_task(self._run_health_checks_loop())
+
+    async def run_health_checks_once(self) -> dict[str, Any]:
+        """Run one pass of provider health checks and return the resulting status.
+
+        Phase 15 daily maintenance: a Celery beat task invokes this through
+        `run_coroutine` so the provider-quota check runs off the request path.
+        """
+        await self._perform_health_checks()
+        return self.get_health_status()
 
     async def _run_health_checks_loop(self) -> None:
         """Run health checks for all providers."""
@@ -846,6 +1043,55 @@ class ProviderManager:
                     errors.append(last)
                     logger.warning(
                         "provider_rung_failed",
+                        provider=name,
+                        attempt=attempt,
+                        error=str(exc),
+                    )
+        raise ProviderUnavailableError("; ".join(errors) or "no providers configured")
+
+    def stream(self, *, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        """Stream through the fallback chain (Phase 15 M3).
+
+        A rung that rejects the request before its first token is retried /
+        skipped for the next rung. A rung that dies *after* yielding tokens
+        propagates `ProviderUnavailableError` immediately: partial output
+        cannot be cleanly resumed on another provider, so the caller falls
+        back to deterministic synthesis.
+        """
+        retries = max(0, int(self._settings.generation_retries))
+        errors: list[str] = []
+        for name in self._providers:
+            provider = self._providers[name]
+            if not self._health.can_use_provider(name):
+                errors.append(f"{name}: circuit open")
+                continue
+            stream = getattr(provider, "stream", None)
+            if stream is None:
+                errors.append(f"{name}: no stream support")
+                continue
+            for attempt in range(retries + 1):
+                if attempt > 0:
+                    time.sleep(0.5 * (2 ** (attempt - 1)))  # exponential backoff
+                started = False
+                total_text = ""
+                try:
+                    for chunk in stream(
+                        system_prompt=system_prompt, user_prompt=user_prompt
+                    ):
+                        started = True
+                        total_text += chunk
+                        yield chunk
+                    self._health.record_success(name)
+                    self._health.record_usage(name, tokens=len(total_text))
+                    return
+                except ProviderUnavailableError as exc:
+                    self._health.record_failure(name)
+                    if started:
+                        raise
+                    last = f"{name}: {exc}"
+                    errors.append(last)
+                    logger.warning(
+                        "provider_stream_rung_failed",
                         provider=name,
                         attempt=attempt,
                         error=str(exc),

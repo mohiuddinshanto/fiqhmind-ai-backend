@@ -1,14 +1,22 @@
-"""Chat endpoint (Phase 10): grounded answer over SSE.
+"""Chat endpoint (Phase 10 + Phase 15 M3): grounded answer over SSE.
 
-`POST /api/v1/chat` runs the Phase 9 retrieval pipeline, then the Phase 10
-generation loop, persists the turn to `chat_history`, and streams the answer as
-typed Server-Sent Events in the ARCHITECTURE §Phase 10 order:
+`POST /api/v1/chat` runs the Phase 9 retrieval pipeline, then the generation
+loop, persists the turn to `chat_history`, and streams the answer as typed
+Server-Sent Events.
+
+Phase 10 mode (`stream=false`, default) generates + validates the full answer
+*before* the stream starts and replays it in the ARCHITECTURE §Phase 10 order:
 
     meta → sources → delta → quote → citation → confidence → done
 
-The full answer is generated and validated *before* the stream starts, so the
-client only ever sees a validated, grounded answer. If an unexpected error
-occurs mid-stream, an `error` event is emitted before the stream closes.
+Phase 15 M3 mode (`stream=true`) streams LLM tokens as they are produced:
+
+    start → token* → done | error
+
+The `done` payload is always the fully validated, structured answer; a cache
+hit replays it through the same protocol without retrieval/generation, and a
+cache miss caches + persists history only after validation (a failed stream
+never writes a partial cache entry).
 
 Phase 15: the validated answer (plus the retrieval context it was built from) is
 cached under the QA answer cache keyed by the full request scope, so repeated
@@ -18,12 +26,13 @@ uncached path and never break the request.
 
 import hashlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 
 from app.api.v1.deps import (
     DbSession,
@@ -37,7 +46,11 @@ from app.db.repositories import ChatHistoryRepository
 from app.schemas.chat import ChatAnswer, ChatRequest
 from app.schemas.retrieval import RetrievalChunk
 from app.services.cache import CacheService
-from app.services.generation.service import get_generator
+from app.services.generation.service import (
+    StreamAnswer,
+    StreamToken,
+    get_generator,
+)
 from app.services.hybrid_search import PayloadFilter
 from app.services.retrieval import (
     RetrievalResult,
@@ -51,6 +64,7 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["chat"])
 
 _DELTA_TOKENS = 4
+_SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 
 @router.post("/chat")
@@ -61,50 +75,69 @@ def chat_question(
     cache: Annotated[CacheService, Depends(get_cache_service)],
     _: Annotated[None, Depends(require_rate_limit("chat"))] = None,
 ) -> StreamingResponse:
-    """Retrieve evidence, generate a grounded answer, stream it as SSE."""
+    """Retrieve evidence, then stream the grounded answer as SSE.
+
+    Phase 10 mode (`stream=false`, default): the full answer is generated and
+    validated *before* the stream starts, then replayed as typed events in the
+    ARCHITECTURE order (`meta -> sources -> delta -> quote -> citation ->
+    confidence -> done`).
+
+    Phase 15 M3 mode (`stream=true`): LLM tokens stream as they are produced
+    (`start -> token* -> done | error`). A cache hit replays the cached answer
+    through the same protocol without retrieval or generation; a cache miss
+    accumulates the stream, validates it, caches the final structured answer,
+    and persists history exactly once. Both modes share the same QA cache key.
+    """
     cache_key = _qa_cache_key(request)
     cached = _cached_answer(cache, cache_key)
     if cached is not None:
         retrieval, answer = cached
-    else:
-        runner = RetrievalRunner(session, store, cache=cache)
-        retrieval = runner.search(
-            request.query,
-            filters=PayloadFilter(
-                book_id=request.book_id,
-                volume=request.volume,
-                region=request.region,
-                verified=request.verified,
-            ),
-            top_n=request.top_n,
-        )
-        answer = get_generator().generate(retrieval, answer_language=request.answer_language)
-        cache.set(
-            cache_key,
-            {
-                "retrieval": _retrieval_to_dict(retrieval),
-                "answer": answer.model_dump(mode="json"),
-            },
-            ttl_seconds=get_settings().cache_qa_ttl_seconds,
+        _persist_history(session, retrieval, answer)
+        if request.stream:
+            return StreamingResponse(
+                _stream_cached_answer(request, retrieval, answer),
+                media_type="text/event-stream",
+                headers=_SSE_HEADERS,
+            )
+        return StreamingResponse(
+            _stream_events(request, retrieval, answer),
+            media_type="text/event-stream",
+            headers=_SSE_HEADERS,
         )
 
-    ChatHistoryRepository(session).add(
-        question=retrieval.query,
-        normalized_query=retrieval.canonical_arabic_query,
-        answer_language=answer.answer_language,
-        answer=answer.model_dump(mode="json"),
-        sources=[
-            RetrievalChunk.model_validate(chunk).model_dump(mode="json")
-            for chunk in retrieval.chunks
-        ],
-        confidence=answer.confidence.level,
-        refusal=answer.refusal.reason if answer.refusal else None,
+    runner = RetrievalRunner(session, store, cache=cache)
+    retrieval = runner.search(
+        request.query,
+        filters=PayloadFilter(
+            book_id=request.book_id,
+            volume=request.volume,
+            region=request.region,
+            verified=request.verified,
+        ),
+        top_n=request.top_n,
     )
 
+    if request.stream:
+        return StreamingResponse(
+            _stream_generated_answer(request, retrieval, session, cache, cache_key),
+            media_type="text/event-stream",
+            headers=_SSE_HEADERS,
+        )
+
+    answer = get_generator().generate(retrieval, answer_language=request.answer_language)
+    cache.set(
+        cache_key,
+        {
+            "retrieval": _retrieval_to_dict(retrieval),
+            "answer": answer.model_dump(mode="json"),
+        },
+        ttl_seconds=get_settings().cache_qa_ttl_seconds,
+    )
+    _persist_history(session, retrieval, answer)
     return StreamingResponse(
         _stream_events(request, retrieval, answer),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=_SSE_HEADERS,
     )
 
 
@@ -139,6 +172,100 @@ def _cached_answer(
         logger.warning("qa_cache_read_failed", key=cache_key, error=str(exc))
         return None
     return retrieval, answer
+
+
+def _persist_history(session: Session, retrieval: RetrievalResult, answer: ChatAnswer) -> None:
+    """Persist one chat_history row for a completed turn (cache hit or miss)."""
+    ChatHistoryRepository(session).add(
+        question=retrieval.query,
+        normalized_query=retrieval.canonical_arabic_query,
+        answer_language=answer.answer_language,
+        answer=answer.model_dump(mode="json"),
+        sources=[
+            RetrievalChunk.model_validate(chunk).model_dump(mode="json")
+            for chunk in retrieval.chunks
+        ],
+        confidence=answer.confidence.level,
+        refusal=answer.refusal.reason if answer.refusal else None,
+    )
+
+
+def _stream_cached_answer(
+    request: ChatRequest, retrieval: RetrievalResult, answer: ChatAnswer
+) -> Iterator[str]:
+    """Replay a cached answer through the streaming protocol (no retrieval/generation).
+
+    The `done` payload carries the full validated structured answer so the
+    client can render quotes/citations/confidence exactly like a fresh stream.
+    """
+    try:
+        yield _sse(
+            "start",
+            {
+                "query": retrieval.query,
+                "language": retrieval.language,
+                "answer_language": answer.answer_language,
+                "latency_budget_ms": get_settings().generation_latency_budget_ms,
+            },
+        )
+        for delta in _split_explanation(answer.explanation.html):
+            yield _sse("token", {"text": delta})
+
+        yield _sse("done", answer.model_dump(mode="json"))
+    except Exception as exc:  # pragma: no cover - defensive mid-stream failure
+        logger.exception("sse_cache_replay_failed")
+        yield _sse("error", {"code": "stream_error", "message": str(exc)})
+
+
+def _stream_generated_answer(
+    request: ChatRequest,
+    retrieval: RetrievalResult,
+    session: Session,
+    cache: CacheService,
+    cache_key: str,
+) -> Iterator[str]:
+    """Stream live LLM tokens; cache + persist only the validated answer.
+
+    On a cache miss the raw stream is accumulated, validated (schema +
+    citation coverage), and only the final structured answer is written to the
+    QA cache and chat_history — a failed generation never writes a partial
+    entry. Failures emit an `error` event instead of a `done`.
+    """
+    try:
+        yield _sse(
+            "start",
+            {
+                "query": retrieval.query,
+                "language": retrieval.language,
+                "answer_language": request.answer_language,
+                "latency_budget_ms": get_settings().generation_latency_budget_ms,
+            },
+        )
+
+        answer: ChatAnswer | None = None
+        for event in get_generator().stream_answer(
+            retrieval, answer_language=request.answer_language
+        ):
+            if isinstance(event, StreamToken):
+                yield _sse("token", {"text": event.text})
+            elif isinstance(event, StreamAnswer):
+                answer = event.answer
+        if answer is None:
+            raise RuntimeError("generation stream finished without an answer")
+
+        cache.set(
+            cache_key,
+            {
+                "retrieval": _retrieval_to_dict(retrieval),
+                "answer": answer.model_dump(mode="json"),
+            },
+            ttl_seconds=get_settings().cache_qa_ttl_seconds,
+        )
+        _persist_history(session, retrieval, answer)
+        yield _sse("done", answer.model_dump(mode="json"))
+    except Exception as exc:
+        logger.exception("chat_stream_failed")
+        yield _sse("error", {"code": "generation_error", "message": str(exc)})
 
 
 async def _stream_events(
