@@ -743,3 +743,76 @@ class AuditLog(UUIDPrimaryKeyMixin, Base):
 
     def __repr__(self) -> str:
         return f"<AuditLog {self.action}>"
+
+
+class EvalRun(UUIDPrimaryKeyMixin, Base):
+    """One Phase 17 eval harness run: an aggregate snapshot over the gold set.
+
+    ARCHITECTURE §17.3: results land in Postgres (`eval_runs`,
+    `eval_run_results`) so trend history needs no external observability
+    platform. Every run stores the thresholds it was checked against and the
+    resulting per-metric aggregate plus a `failures` list so a regression gate
+    (CI or a human) can see exactly which metric missed its floor.
+    """
+
+    __tablename__ = "eval_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('running', 'passed', 'failed', 'error')",
+            name="ck_eval_runs_status",
+        ),
+    )
+
+    label: Mapped[str] = mapped_column(String(120), default="manual", nullable=False)
+    git_sha: Mapped[str | None] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(20), default="running", nullable=False)
+    gold_set_version: Mapped[str | None] = mapped_column(String(20))
+    total_items: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    metrics: Mapped[dict | None] = mapped_column(JSON)
+    thresholds: Mapped[dict | None] = mapped_column(JSON)
+    failures: Mapped[list | None] = mapped_column(JSON)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    results: Mapped[list["EvalRunResult"]] = relationship(back_populates="run")
+
+    def __repr__(self) -> str:
+        return f"<EvalRun {self.label} {self.status}>"
+
+
+class EvalRunResult(UUIDPrimaryKeyMixin, Base):
+    """Per-gold-item, per-language result from a single eval replay.
+
+    Keeps the raw retrieval order (`retrieved_chunk_ids`), the generated
+    answer, and the per-item metric vector so any aggregate can be recomputed
+    offline without re-running the pipeline (ARCHITECTURE: replay through the
+    *live* pipeline, then persist everything needed for analysis).
+    """
+
+    __tablename__ = "eval_run_results"
+
+    run_id: Mapped[str] = mapped_column(ForeignKey("eval_runs.id"), index=True, nullable=False)
+    gold_item_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    language: Mapped[str] = mapped_column(String(10), default="bn", nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(50), nullable=False)
+    difficulty: Mapped[str] = mapped_column(String(20), nullable=False)
+    expected_citations: Mapped[list | None] = mapped_column(JSON)
+    expected_answer: Mapped[str | None] = mapped_column(Text)
+    expect_refusal: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    retrieved_chunk_ids: Mapped[list | None] = mapped_column(JSON)
+    answer: Mapped[dict | None] = mapped_column(JSON)
+    refusal_given: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    metrics: Mapped[dict | None] = mapped_column(JSON)
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    run: Mapped[EvalRun] = relationship(back_populates="results")
+
+    def __repr__(self) -> str:
+        return f"<EvalRunResult {self.gold_item_id} {self.language}>"

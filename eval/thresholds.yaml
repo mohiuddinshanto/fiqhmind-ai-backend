@@ -1,0 +1,19 @@
+# Phase 17 regression thresholds (ARCHITECTURE §17.3).
+# The eval runner compares each run's aggregate metrics against these floors
+# (ceiling for hallucination_rate) and fails the run if any are violated.
+# Values are starter floors for the first 30-50 gold items; they tighten as
+# retrieval tuning (Phase 9/10) moves the measured numbers up.
+#
+# reference: Recall@K >= 0.85, Citation Accuracy >= 0.95, Hallucination Rate <= 0.03
+metrics:
+  recall@5: 0.5
+  recall@10: 0.75
+  recall@20: 0.85
+  mrr: 0.5
+  ndcg@10: 0.6
+  citation_accuracy: 0.85
+  groundedness: 0.7
+  hallucination_rate: 0.1
+  refusal_precision: 0.8
+  refusal_recall: 0.8
+  answer_accuracy: 1.0
