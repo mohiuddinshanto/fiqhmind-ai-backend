@@ -42,7 +42,11 @@ def get_v1_prompts(
         "Hard rules:\n"
         "1. Answer ONLY from the provided evidence chunks. Never add knowledge from\n"
         "   your pretraining — no independent recollection of rulings, verses, or hadith.\n"
-        "2. Every factual claim must carry a citation to a provided chunk.\n"
+        "2. Every factual claim must carry an inline citation marker to the evidence\n"
+        "   block it comes from, formatted as [EVIDENCE_i] with the exact index of that\n"
+        "   block. Every block you reference must also appear in the citations list;\n"
+        "   never reference an evidence block you do not cite, and never fabricate an\n"
+        "   index that was not provided.\n"
         "3. If evidence is insufficient, unclear, or contradictory: state exactly that,\n"
         "   show the closest evidence found, and refuse to fabricate.\n"
         "4. Distinguish between the source book's ruling, and any ikhtilaf (disagreement)\n"
@@ -50,7 +54,13 @@ def get_v1_prompts(
         '5. Quote Arabic verbatim. Never "fix" or modernize the quotation.\n'
         "6. If a Quranic verse or hadith appears in the source, quote it only as the\n"
         "   source quotes it, and cite the source, not your memory.\n"
-        "7. Do not give legal rulings (fatwa) of your own; report what the books say."
+        "7. Do not give legal rulings (fatwa) of your own; report what the books say.\n"
+        "8. The explanation.html field must use ONLY these HTML tags: p, b, strong, i,\n"
+        "   em, u, blockquote, cite, code, pre, ul, ol, li, h1-h6, span, a. Never use\n"
+        "   style, class, id, or on* event attributes, and never use script, style,\n"
+        "   iframe, img, embed, object, form, or any other tag.\n"
+        "9. Output exactly one JSON object and nothing else: no markdown fences, no\n"
+        "   code blocks, no prose or commentary outside the JSON."
     )
 
     user_prompt = (
@@ -65,15 +75,19 @@ def get_v1_prompts(
         f"{formatted_evidence}"
         "=== END OF EVIDENCE ===\n\n"
         "=== OUTPUT SPECIFICATION AND CONTRACT ===\n"
-        "You must output a single, valid JSON object. No extra text, preambles, or markdown "
-        "formatting outside the JSON. The JSON structure must match this schema exactly:\n"
+        "You must output a single, valid JSON object and NOTHING else: no markdown code "
+        "fences, no preambles, no trailing prose. Every claim in the explanation must "
+        "carry its [EVIDENCE_i] marker inline, and every [EVIDENCE_i] you reference must "
+        "also be present in the citations list. The JSON structure must match this "
+        "schema exactly:\n"
         "{\n"
         '  "answer_language": "bn",\n'
         '  "explanation": {\n'
         '    "type": "bengali",\n'
-        '    "html": "A detailed explanation in Bengali. HTML tags like <p>, <b>, <ul>, <li> '
-        "are allowed. Every factual claim in this explanation must refer to evidence block IDs "
-        '(e.g. [EVIDENCE_1]) directly inside the sentences."\n'
+        '    "html": "A detailed explanation in Bengali. Allowed tags are limited to '
+        "p, b, strong, i, em, u, blockquote, cite, code, pre, ul, ol, li, h1-h6, span, "
+        "a. No attributes other than href on <a>. Every factual claim must refer to "
+        'evidence block IDs (e.g. [EVIDENCE_1]) directly inside the sentences."\n'
         "  },\n"
         '  "arabic_quotes": [\n'
         "    {\n"

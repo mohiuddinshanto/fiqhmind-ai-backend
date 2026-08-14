@@ -152,6 +152,30 @@ def test_stream_answer_streams_provider_tokens_and_validates() -> None:
     assert answer.citations[0].page == "5"
 
 
+def test_stream_answer_final_html_is_sanitized() -> None:
+    hostile = (
+        '{"answer_language":"bn",'
+        '"explanation":{"type":"bengali",'
+        '"html":"<p>উত্তর [EVIDENCE_1]</p><script>alert(1)</script><img src=x onerror=alert(2)>"},'
+        '"arabic_quotes":[{"text":"الماء طهور"}],'
+        '"citations":[{"chunk_id":"c1","book":"hallucinated","volume":99,"page":999}],'
+        '"refusal":null,"caveats":[],"related":[]}'
+    )
+    provider = FakeStreamProvider([hostile])
+    service = GenerationService(
+        settings=Settings(generator_provider="gemini", gemini_api_key="k"),
+        provider=provider,
+    )
+
+    events = list(service.stream_answer(_retrieval([_chunk("c1")]), answer_language="bn"))
+    answers = [event for event in events if isinstance(event, StreamAnswer)]
+
+    assert len(answers) == 1
+    html = answers[0].answer.explanation.html
+    assert "<script>" not in html and "onerror" not in html and "<img" not in html
+    assert "<p>উত্তর [EVIDENCE_1]</p>" in html
+
+
 def test_stream_answer_falls_back_to_complete_when_provider_has_no_stream() -> None:
     class _CompleteOnlyProvider:
         def __init__(self) -> None:

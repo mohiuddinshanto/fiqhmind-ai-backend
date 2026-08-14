@@ -368,7 +368,10 @@ def test_stream_generation_failure_emits_error_without_cache_or_history(
     assert names[-1] == "error"
     error = events[-1][1]
     assert error["code"] == "generation_error"
-    assert "vendor exploded" in error["message"]
+    # The client only ever sees a stable safe message — never the raw exception
+    # (provider internals, database details, filesystem paths, secrets).
+    assert "vendor exploded" not in error["message"]
+    assert error["message"] == chat_endpoints._SAFE_ERROR_MESSAGE
 
     # A failed generation writes neither a cache entry nor a history row.
     from app.api.v1 import deps as deps_module

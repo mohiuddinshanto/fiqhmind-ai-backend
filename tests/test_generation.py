@@ -479,3 +479,40 @@ def test_service_regenerates_once_and_recovers() -> None:
     assert len(provider.calls) == 2
     assert answer.refusal is None
     assert answer.citations[0].chunk_id == "c1"
+
+
+def test_service_sanitizes_llm_html_before_returning() -> None:
+    hostile = (
+        '<p>উত্তর [EVIDENCE_1]</p><script>alert(document.cookie)</script>'
+        '<img src=x onerror="alert(1)">'
+    )
+    provider = FakeProvider([_valid_raw(html=hostile)])
+    service = GenerationService(
+        settings=Settings(generator_provider="gemini", gemini_api_key="k"),
+        provider=provider,
+    )
+
+    answer = service.generate(_retrieval([_chunk("c1")]), answer_language="bn")
+
+    html = answer.explanation.html
+    assert "<script>" not in html and "</script>" not in html
+    assert "onerror" not in html and "<img" not in html
+    # The legitimate evidence markup and citation marker survive.
+    assert "<p>উত্তর [EVIDENCE_1]</p>" in html
+
+
+def test_service_sanitization_can_be_disabled_via_settings() -> None:
+    hostile = '<p>ok [EVIDENCE_1]</p><script>alert(1)</script>'
+    provider = FakeProvider([_valid_raw(html=hostile)])
+    service = GenerationService(
+        settings=Settings(
+            generator_provider="gemini",
+            gemini_api_key="k",
+            generation_sanitize_html=False,
+        ),
+        provider=provider,
+    )
+
+    answer = service.generate(_retrieval([_chunk("c1")]), answer_language="bn")
+
+    assert answer.explanation.html == hostile

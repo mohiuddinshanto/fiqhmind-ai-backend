@@ -65,6 +65,10 @@ router = APIRouter(tags=["chat"])
 
 _DELTA_TOKENS = 4
 _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+# Stable client-facing message for the SSE `error` event. The detailed exception
+# is logged server-side; never leak stack traces, provider internals, database
+# details, filesystem paths or secrets to the client.
+_SAFE_ERROR_MESSAGE = "The answer could not be generated. Please try again."
 
 
 @router.post("/chat")
@@ -212,9 +216,9 @@ def _stream_cached_answer(
             yield _sse("token", {"text": delta})
 
         yield _sse("done", answer.model_dump(mode="json"))
-    except Exception as exc:  # pragma: no cover - defensive mid-stream failure
+    except Exception:  # pragma: no cover - defensive mid-stream failure
         logger.exception("sse_cache_replay_failed")
-        yield _sse("error", {"code": "stream_error", "message": str(exc)})
+        yield _sse("error", {"code": "stream_error", "message": _SAFE_ERROR_MESSAGE})
 
 
 def _stream_generated_answer(
@@ -263,9 +267,9 @@ def _stream_generated_answer(
         )
         _persist_history(session, retrieval, answer)
         yield _sse("done", answer.model_dump(mode="json"))
-    except Exception as exc:
+    except Exception:
         logger.exception("chat_stream_failed")
-        yield _sse("error", {"code": "generation_error", "message": str(exc)})
+        yield _sse("error", {"code": "generation_error", "message": _SAFE_ERROR_MESSAGE})
 
 
 async def _stream_events(
@@ -312,9 +316,9 @@ async def _stream_events(
                 "related": answer.related,
             },
         )
-    except Exception as exc:  # pragma: no cover - defensive mid-stream failure
+    except Exception:  # pragma: no cover - defensive mid-stream failure
         logger.exception("sse_stream_failed")
-        yield _sse("error", {"code": "stream_error", "message": str(exc)})
+        yield _sse("error", {"code": "stream_error", "message": _SAFE_ERROR_MESSAGE})
 
 
 def _split_explanation(html: str) -> list[str]:

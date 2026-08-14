@@ -40,6 +40,7 @@ from app.services.generation.validation import (
     GenerationValidationError,
     validate_llm_answer,
 )
+from app.services.html_sanitizer import sanitize_html
 from app.services.retrieval import RetrievalResult, RetrievedChunk
 
 logger = structlog.get_logger(__name__)
@@ -247,8 +248,8 @@ class GenerationService:
         )
         return iter([raw]) if raw else iter(())
 
-    @staticmethod
     def _assemble(
+        self,
         payload: dict[str, Any],
         retrieval: RetrievalResult,
         chunks: list[RetrievedChunk],
@@ -268,11 +269,14 @@ class GenerationService:
             for quote in payload["arabic_quotes"]
         ]
         refusal = payload.get("refusal")
+        explanation_html = payload["explanation"]["html"]
+        if self._settings.generation_sanitize_html:
+            explanation_html = sanitize_html(explanation_html)
         return ChatAnswer(
             answer_language=answer_language,
             explanation=Explanation(
                 type=payload["explanation"].get("type", "markdown"),
-                html=payload["explanation"]["html"],
+                html=explanation_html,
             ),
             arabic_quotes=quotes,
             citations=citations,

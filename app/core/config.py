@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     generation_max_chunks: int = 7
     # Number of regenerate attempts after a validation failure (validate → fail → retry once).
     generation_retries: int = 1
+    # Sanitize LLM-generated `explanation.html` through the allowlist filter
+    # before it is stored/streamed. The frontend renders this field via
+    # `dangerouslySetInnerHTML`, so it must never carry scripts/event handlers
+    # (app.services.html_sanitizer). Deterministic synthesis is unaffected.
+    generation_sanitize_html: bool = True
     # Outbound provider request timeout in seconds.
     generation_request_timeout_seconds: float = 60.0
     # Target first-delta latency budget reported in the SSE `meta` event.
