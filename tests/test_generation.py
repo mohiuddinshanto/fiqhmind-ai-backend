@@ -230,8 +230,28 @@ def test_provider_factory_deterministic_returns_none() -> None:
 
 
 def test_provider_factory_missing_key_falls_back() -> None:
-    assert get_llm_provider(Settings(generator_provider="gemini")) is None
-    assert get_llm_provider(Settings(generator_provider="groq")) is None
+    assert (
+        get_llm_provider(
+            Settings(
+                generator_provider="gemini",
+                gemini_api_key=None,
+                groq_api_key=None,
+                openrouter_api_key=None,
+            )
+        )
+        is None
+    )
+    assert (
+        get_llm_provider(
+            Settings(
+                generator_provider="groq",
+                gemini_api_key=None,
+                groq_api_key=None,
+                openrouter_api_key=None,
+            )
+        )
+        is None
+    )
 
 
 def test_provider_factory_unknown_provider_raises() -> None:
@@ -252,7 +272,14 @@ def test_provider_factory_builds_managers() -> None:
     )
 
     # With a single key, the manager's chain should be one provider
-    gem_manager = get_llm_provider(Settings(generator_provider="gemini", gemini_api_key="k"))
+    gem_manager = get_llm_provider(
+        Settings(
+            generator_provider="gemini",
+            gemini_api_key="k",
+            groq_api_key=None,
+            openrouter_api_key=None,
+        )
+    )
     assert gem_manager.chain_names() == ["gemini"]
 
 

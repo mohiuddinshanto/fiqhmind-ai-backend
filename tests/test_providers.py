@@ -185,7 +185,12 @@ class TestProviderHealthService:
 
     def test_health_service_initialization(self) -> None:
         """Test health service initialization."""
-        settings = Settings(generator_provider="gemini", gemini_api_key="test_key")
+        settings = Settings(
+            generator_provider="gemini",
+            gemini_api_key="test_key",
+            groq_api_key=None,
+            openrouter_api_key=None,
+        )
         health_service = ProviderHealthService(settings)
 
         assert "gemini" in health_service._circuit_breakers
@@ -199,7 +204,12 @@ class TestProviderHealthService:
 
     def test_can_use_provider(self) -> None:
         """Test can_use_provider method."""
-        settings = Settings(generator_provider="gemini", gemini_api_key="test_key")
+        settings = Settings(
+            generator_provider="gemini",
+            gemini_api_key="test_key",
+            groq_api_key=None,
+            openrouter_api_key=None,
+        )
         health_service = ProviderHealthService(settings)
 
         assert health_service.can_use_provider("gemini")
@@ -241,7 +251,12 @@ class TestProviderHealthService:
 
     def test_get_health_status(self) -> None:
         """Test get_health_status method."""
-        settings = Settings(generator_provider="gemini", gemini_api_key="test_key")
+        settings = Settings(
+            generator_provider="gemini",
+            gemini_api_key="test_key",
+            groq_api_key=None,
+            openrouter_api_key=None,
+        )
         health_service = ProviderHealthService(settings)
 
         status = health_service.get_health_status()
@@ -477,13 +492,23 @@ class TestProviderManager:
 
     def test_chain_excludes_unconfigured(self) -> None:
         """Providers without a key are excluded from the chain."""
-        settings = Settings(generator_provider="gemini", gemini_api_key="test_key")
+        settings = Settings(
+            generator_provider="gemini",
+            gemini_api_key="test_key",
+            groq_api_key=None,
+            openrouter_api_key=None,
+        )
         manager = ProviderManager(settings=settings)
         assert manager.chain_names() == ["gemini"]
 
     def test_chain_empty_without_keys(self) -> None:
         """A configured provider without a key yields an empty chain."""
-        settings = Settings(generator_provider="gemini", gemini_api_key=None)
+        settings = Settings(
+            generator_provider="gemini",
+            gemini_api_key=None,
+            groq_api_key=None,
+            openrouter_api_key=None,
+        )
         manager = ProviderManager(settings=settings)
         assert manager.chain_names() == []
 
@@ -595,7 +620,12 @@ class TestGetLLMProvider:
             get_llm_provider(Settings(generator_provider="foo"))
 
     def test_provider_without_key_returns_none(self) -> None:
-        settings = Settings(generator_provider="gemini", gemini_api_key=None)
+        settings = Settings(
+            generator_provider="gemini",
+            gemini_api_key=None,
+            groq_api_key=None,
+            openrouter_api_key=None,
+        )
         assert get_llm_provider(settings) is None
 
     def test_returns_manager_with_keys(self) -> None:

@@ -1,7 +1,69 @@
 from functools import lru_cache
+from urllib.parse import quote
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _normalize_database_url(url: str) -> str:
+    """Force the psycopg (v3) driver onto a bare postgres/postgresql URL.
+
+    The project depends on `psycopg[binary]`, not psycopg2, so a supplied
+    `postgres://...` / `postgresql://...` URL must be rewritten to
+    `postgresql+psycopg://...` or SQLAlchemy will try the missing psycopg2
+    dialect at engine creation time.
+    """
+    for prefix in ("postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix) :]
+    return url
+
+
+def _qdrant_url_from_host(host: str) -> str:
+    """Build a `QdrantClient(url=...)` value from QDRANT_HOST.
+
+    The client expects a full URL (scheme + host + port). Accept either a full
+    URL (`https://cluster.qdrant.io:6333`) or a bare hostname (`cluster.qdrant.io`),
+    normalising the latter to `https://<host>:6333` without ever doubling a scheme.
+    """
+    host = host.strip()
+    if "://" in host:
+        return host
+    return f"https://{host}:6333"
+
+
+def _upstash_host(rest_url: str) -> str:
+    """Extract the RES/RESP hostname from an Upstash REST URL.
+
+    `https://us1-abc.upstash.io` (optionally with a path) -> `us1-abc.upstash.io`.
+    """
+    host = rest_url.strip()
+    for prefix in ("https://", "http://"):
+        if host.lower().startswith(prefix):
+            host = host[len(prefix) :]
+    host = host.split("/", 1)[0].split("?", 1)[0]
+    host = host.rsplit("@", 1)[-1]
+    head, _, tail = host.rpartition(":")
+    if head and tail.isdigit():
+        host = head
+    return host
+
+
+def _upstash_redis_url(rest_url: str, token: str) -> str:
+    """Build a redis-py compatible URL from Upstash REST credentials.
+
+    Upstash speaks the standard Redis protocol over TLS, so the existing
+    redis-py architecture is reused unchanged. Username is `default`, the REST
+    token is the password, and Upstash exposes a single logical database, so
+    every consumer (cache/rate-limit/broker/result) shares db 0. The explicit
+    `ssl_cert_reqs=CERT_REQUIRED` query param is required by Celery's redis
+    result backend, which refuses a `rediss://` URL without it.
+    """
+    host = _upstash_host(rest_url)
+    return (
+        f"rediss://default:{quote(token, safe='')}@{host}:6379/0"
+        "?ssl_cert_reqs=CERT_REQUIRED"
+    )
 
 
 class Settings(BaseSettings):
@@ -31,7 +93,17 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
 
-    # Qdrant — vector store for chunks
+    # Optional Upstash Redis. When set (and REDIS_URL is NOT explicitly set),
+    # the REST URL + token are converted to a single redis-py `rediss://` URL
+    # that backs cache, rate limits, and the Celery broker/result store alike
+    # (Upstash exposes one logical database, so every consumer shares db 0).
+    upstash_redis_rest_url: str | None = None
+    upstash_redis_rest_token: str | None = None
+
+    # Qdrant — vector store for chunks. QDRANT_HOST accepts either a full URL
+    # (`https://cluster.qdrant.io:6333`) or a bare hostname (normalised to
+    # `https://<host>:6333`). A QDRANT_URL set explicitly always wins.
+    qdrant_host: str | None = None
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str | None = None
     qdrant_collection: str = "fiqh_chunks"
@@ -125,6 +197,34 @@ class Settings(BaseSettings):
     upload_allowed_mime: str = "application/pdf"
     upload_chunk_size: int = 64 * 1024  # streaming read chunk, never buffer whole files
     upload_max_files_per_request: int = 20
+
+    @model_validator(mode="after")
+    def _derive_external_urls(self) -> "Settings":
+        """Normalise external-service URLs after env/.env loading.
+
+        Every field keeps its default (localhost) when no external value is
+        supplied, so local development and the existing test suite behave
+        exactly as before. Explicit values (already in `model_fields_set`)
+        always take precedence over derived ones.
+        """
+        self.database_url = _normalize_database_url(self.database_url)
+
+        if self.qdrant_host and "qdrant_url" not in self.model_fields_set:
+            self.qdrant_url = _qdrant_url_from_host(self.qdrant_host)
+
+        if (
+            self.upstash_redis_rest_url
+            and self.upstash_redis_rest_token
+            and "redis_url" not in self.model_fields_set
+        ):
+            derived = _upstash_redis_url(
+                self.upstash_redis_rest_url, self.upstash_redis_rest_token
+            )
+            self.redis_url = derived
+            self.celery_broker_url = derived
+            self.celery_result_backend = derived
+
+        return self
 
 
 @lru_cache

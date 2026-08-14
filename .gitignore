@@ -18,3 +18,7 @@ htmlcov/
 
 # Uploaded files (local storage provider)
 storage/
+
+# Celery beat state
+celerybeat-schedule*
+celerybeat.pid

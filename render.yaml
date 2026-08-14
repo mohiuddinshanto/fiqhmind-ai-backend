@@ -1,0 +1,47 @@
+# Render Blueprint for the FiqhMind backend.
+#
+# One Web Service runs the API, a single Celery worker (all 5 queues) and
+# Celery Beat inside the same container (entrypoint), so web and workers
+# share the persistent disk mounted at /app/storage. Uploaded books live
+# under /app/storage/uploads (UPLOAD_STORAGE_PATH default).
+#
+# This file lives at the root of the `fiqhmind-ai-backend` repository, so
+# dockerfilePath is ./Dockerfile and dockerContext is the repo root.
+#
+# Secret env vars use `sync: false`, so Render prompts for their values in
+# the dashboard instead of storing them in this file. PORT is injected by
+# Render automatically.
+services:
+  - type: web
+    name: fiqhmind-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/v1/health
+    disk:
+      name: uploads
+      mountPath: /app/storage
+      sizeGB: 5
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: FRONTEND_ORIGIN
+        value: https://fiqhmind-ai.vercel.app
+      - key: UPLOAD_STORAGE_PATH
+        value: /app/storage/uploads
+      - key: CELERY_WORKER_CONCURRENCY
+        value: "1"
+      - key: DATABASE_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: QDRANT_HOST
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
