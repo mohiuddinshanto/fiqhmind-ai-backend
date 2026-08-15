@@ -55,15 +55,14 @@ def _upstash_redis_url(rest_url: str, token: str) -> str:
     Upstash speaks the standard Redis protocol over TLS, so the existing
     redis-py architecture is reused unchanged. Username is `default`, the REST
     token is the password, and Upstash exposes a single logical database, so
-    every consumer (cache/rate-limit/broker/result) shares db 0. The explicit
-    `ssl_cert_reqs=CERT_REQUIRED` query param is required by Celery's redis
-    result backend, which refuses a `rediss://` URL without it.
+    every consumer (cache/rate-limit/broker/result) shares db 0. Celery's redis
+    backend refuses a bare `rediss://` URL without an explicit
+    `?ssl_cert_reqs=required` (lowercase) query parameter; redis-py accepts it
+    either way, so the query parameter is always appended to keep every
+    consumer (redis-py and Celery broker/backend alike) on the same URL.
     """
     host = _upstash_host(rest_url)
-    return (
-        f"rediss://default:{quote(token, safe='')}@{host}:6379/0"
-        "?ssl_cert_reqs=CERT_REQUIRED"
-    )
+    return f"rediss://default:{quote(token, safe='')}@{host}:6379/0?ssl_cert_reqs=required"
 
 
 class Settings(BaseSettings):

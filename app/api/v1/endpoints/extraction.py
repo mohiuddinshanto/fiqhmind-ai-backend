@@ -50,11 +50,11 @@ def start_extraction(
     if not upload.storage_path or not storage.exists(upload.storage_path):
         raise ExtractionConflictError("stored file is missing for this upload")
 
-    job = upload.ingestion_job
+    job_repo = IngestionJobRepository(session)
+    job = job_repo.find_pipeline_job(upload_id)
     if job is not None and job.status in _IN_FLIGHT_STATUSES:
         raise ExtractionConflictError(f"extraction already in progress (job status: {job.status})")
 
-    job_repo = IngestionJobRepository(session)
     if job is None:
         job = job_repo.create(IngestionJob(upload_id=upload_id, kind="extraction", status="queued"))
     else:

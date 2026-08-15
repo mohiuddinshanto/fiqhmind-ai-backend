@@ -48,7 +48,7 @@ def test_upstash_credentials_derive_single_redis_url():
         upstash_redis_rest_url="https://us1-demo.upstash.io",
         upstash_redis_rest_token="top-secret",
     )
-    expected = "rediss://default:top-secret@us1-demo.upstash.io:6379/0?ssl_cert_reqs=CERT_REQUIRED"
+    expected = "rediss://default:top-secret@us1-demo.upstash.io:6379/0?ssl_cert_reqs=required"
     assert settings.redis_url == expected
     assert settings.celery_broker_url == expected
     assert settings.celery_result_backend == expected
@@ -70,7 +70,7 @@ def test_upstash_token_is_url_encoded():
         upstash_redis_rest_url="https://us1-demo.upstash.io",
         upstash_redis_rest_token="a/b@c:d",
     )
-    assert settings.redis_url == "rediss://default:a%2Fb%40c%3Ad@us1-demo.upstash.io:6379/0?ssl_cert_reqs=CERT_REQUIRED"
+    assert settings.redis_url == "rediss://default:a%2Fb%40c%3Ad@us1-demo.upstash.io:6379/0?ssl_cert_reqs=required"
 
 
 def test_database_url_bare_postgres_is_normalised():
@@ -93,7 +93,7 @@ def test_upstash_host_parsing():
 
 def test_upstash_redis_url_helper():
     url = _upstash_redis_url("https://us1-demo.upstash.io", "tok")
-    assert url == "rediss://default:tok@us1-demo.upstash.io:6379/0?ssl_cert_reqs=CERT_REQUIRED"
+    assert url == "rediss://default:tok@us1-demo.upstash.io:6379/0?ssl_cert_reqs=required"
 
 
 def test_qdrant_url_from_host_helper():

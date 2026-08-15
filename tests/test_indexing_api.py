@@ -97,7 +97,7 @@ def _complete_pipeline(
     client: TestClient, session: Session, storage: LocalStorageProvider, upload_id: str
 ) -> IngestionJob:
     upload = UploadRepository(session).get(upload_id)
-    extraction_job = upload.ingestion_job
+    extraction_job = IngestionJobRepository(session).find_pipeline_job(upload_id)
     assert extraction_job is not None
     ExtractionRunner(session, storage).run(extraction_job, upload)
     IngestionJobRepository(session).update_status(

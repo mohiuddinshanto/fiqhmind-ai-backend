@@ -25,6 +25,14 @@ class FakeTask:
         self.calls.append((args, kwargs))
 
 
+class DispatchFakes:
+    """Captures both background dispatches made on an accepted upload."""
+
+    def __init__(self) -> None:
+        self.mark_queued = FakeTask()
+        self.pipeline = FakeTask()
+
+
 @pytest.fixture()
 def session() -> Session:
     engine = create_engine(
@@ -58,13 +66,16 @@ def service(session: Session, storage: LocalStorageProvider, settings: Settings)
 
 
 @pytest.fixture()
-def fake_task(monkeypatch) -> FakeTask:
-    task = FakeTask()
-    monkeypatch.setattr(uploads_module, "mark_queued", task)
-    return task
+def fake_task(monkeypatch) -> DispatchFakes:
+    fakes = DispatchFakes()
+    monkeypatch.setattr(uploads_module, "mark_queued", fakes.mark_queued)
+    monkeypatch.setattr(uploads_module, "start_ingestion_pipeline_task", fakes.pipeline)
+    return fakes
 
 
-def test_receive_valid_pdf(service: UploadService, session: Session, fake_task: FakeTask) -> None:
+def test_receive_valid_pdf(
+    service: UploadService, session: Session, fake_task: DispatchFakes
+) -> None:
     data = make_pdf_bytes()
     upload = service.receive(
         BytesIO(data), original_filename="kitab.pdf", content_type="application/pdf"
@@ -78,13 +89,14 @@ def test_receive_valid_pdf(service: UploadService, session: Session, fake_task: 
     assert upload.page_count is None
     assert service._storage.exists(upload.storage_path)
 
-    job = IngestionJobRepository(session).get(upload.ingestion_job.id)
+    job = IngestionJobRepository(session).find_pipeline_job(upload.id)
     assert job is not None
     assert job.status == "uploaded"
     assert job.upload_id == upload.id
 
     assert [log.event for log in upload.logs] == ["uploading", "queued"]
-    assert fake_task.calls == [((job.id, upload.id), {})]
+    assert fake_task.mark_queued.calls == [((job.id, upload.id), {})]
+    assert fake_task.pipeline.calls == [((upload.id,), {})]
 
 
 def test_receive_rejects_bad_magic_bytes(
@@ -143,7 +155,9 @@ def test_receive_rejects_oversized_file(
     assert UploadRepository(session).count() == 0
 
 
-def test_duplicate_detection(service: UploadService, session: Session, fake_task: FakeTask) -> None:
+def test_duplicate_detection(
+    service: UploadService, session: Session, fake_task: DispatchFakes
+) -> None:
     data = make_pdf_bytes()
     first = service.receive(
         BytesIO(data), original_filename="a.pdf", content_type="application/pdf"
@@ -156,7 +170,7 @@ def test_duplicate_detection(service: UploadService, session: Session, fake_task
     assert len(list(service._storage._root.iterdir())) == 1
 
 
-def test_filename_sanitization(service: UploadService, fake_task: FakeTask) -> None:
+def test_filename_sanitization(service: UploadService, fake_task: DispatchFakes) -> None:
     upload = service.receive(
         BytesIO(make_pdf_bytes()),
         original_filename="../../Radd al-Muhtar.pdf",
@@ -167,13 +181,13 @@ def test_filename_sanitization(service: UploadService, fake_task: FakeTask) -> N
 
 
 def test_delete_removes_file_row_and_job(
-    service: UploadService, session: Session, fake_task: FakeTask
+    service: UploadService, session: Session, fake_task: DispatchFakes
 ) -> None:
     upload = service.receive(
         BytesIO(make_pdf_bytes()), original_filename="a.pdf", content_type="application/pdf"
     )
     key = upload.storage_path
-    job_id = upload.ingestion_job.id
+    job_id = IngestionJobRepository(session).find_pipeline_job(upload.id).id
     service.delete(upload)
     assert service._storage.exists(key) is False
     assert UploadRepository(session).get(upload.id) is None

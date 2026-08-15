@@ -11,6 +11,11 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
         "fiqhmind",
         broker=resolved.celery_broker_url,
         backend=resolved.celery_result_backend,
+        include=[
+            "app.tasks.ingestion",
+            "app.tasks.book",
+            "app.tasks.maintenance",
+        ],
     )
     app.conf.update(
         timezone="UTC",

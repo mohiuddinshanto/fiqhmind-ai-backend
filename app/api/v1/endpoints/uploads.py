@@ -12,7 +12,7 @@ from app.core.exceptions import (
     UploadValidationError,
 )
 from app.core.storage import StorageProvider
-from app.db.repositories import UploadRepository
+from app.db.repositories import IngestionJobRepository, UploadRepository
 from app.schemas.uploads import (
     UploadBatchItem,
     UploadBatchResponse,
@@ -118,7 +118,8 @@ def get_upload(upload_id: str, session: DbSession) -> UploadDetailResponse:
         raise NotFoundError("upload not found")
     detail = UploadDetailResponse.model_validate(upload)
     detail.logs = [UploadLogResponse.model_validate(log) for log in upload.logs]
-    detail.ingestion_job_id = upload.ingestion_job.id if upload.ingestion_job is not None else None
+    pipeline_job = IngestionJobRepository(session).find_pipeline_job(upload_id)
+    detail.ingestion_job_id = pipeline_job.id if pipeline_job is not None else None
     return detail
 
 

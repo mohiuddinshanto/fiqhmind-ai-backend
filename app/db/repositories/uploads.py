@@ -40,8 +40,8 @@ class UploadRepository(RepositoryBase[Upload]):
         return log
 
     def delete_with_artifacts(self, upload: Upload) -> None:
-        """Delete the upload row plus its ingestion job (and job errors) and logs."""
-        if upload.ingestion_job is not None:
-            self._session.delete(upload.ingestion_job)
+        """Delete the upload row plus its ingestion jobs (and job artifacts) and logs."""
+        for job in list(upload.ingestion_jobs):
+            self._session.delete(job)
         self._session.delete(upload)
         self._session.commit()

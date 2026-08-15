@@ -100,7 +100,7 @@ def _run_extraction(
     complete: bool = True,
 ) -> IngestionJob:
     upload = UploadRepository(session).get(upload_id)
-    job = upload.ingestion_job
+    job = IngestionJobRepository(session).find_pipeline_job(upload_id)
     assert job is not None
     ExtractionRunner(session, storage).run(job, upload)
     if complete:
@@ -169,7 +169,7 @@ def test_start_extraction_conflicts_while_in_flight(
 ) -> None:
     pdf = build_text_pdf(tmp_path / "text.pdf")
     upload_id = _upload_pdf(client, pdf.read_bytes())
-    job = UploadRepository(session).get(upload_id).ingestion_job
+    job = IngestionJobRepository(session).find_pipeline_job(upload_id)
     assert job is not None
     job.status = "extracting"
     session.commit()
@@ -226,7 +226,7 @@ def test_get_extraction_status_scanned_pdf_has_no_text_layer(
 def test_get_extraction_status_lists_errors(client: TestClient, session: Session, tmp_path) -> None:
     pdf = build_text_pdf(tmp_path / "text.pdf")
     upload_id = _upload_pdf(client, pdf.read_bytes())
-    job = UploadRepository(session).get(upload_id).ingestion_job
+    job = IngestionJobRepository(session).find_pipeline_job(upload_id)
     assert job is not None
     job_repo = IngestionJobRepository(session)
     job_repo.add_error(job, "extracting", "boom")

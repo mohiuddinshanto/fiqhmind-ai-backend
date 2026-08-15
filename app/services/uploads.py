@@ -18,6 +18,7 @@ from app.core.exceptions import DuplicateUploadError, UploadTooLargeError, Uploa
 from app.core.storage import StorageProvider
 from app.db.models import Upload
 from app.db.repositories import IngestionJobRepository, UploadRepository
+from app.tasks.book import start_ingestion_pipeline_task
 from app.tasks.ingestion import mark_queued
 
 logger = structlog.get_logger(__name__)
@@ -161,6 +162,14 @@ class UploadService:
         except Exception:
             # The job row exists; a later reconciliation can requeue it.
             logger.warning("ingestion_job_dispatch_failed", job_id=job_id, upload_id=upload_id)
+        try:
+            # Auto-ingestion: queue the full pipeline (extract → metadata →
+            # chunking → embed/index) so uploads no longer need a manual stage
+            # endpoint. Dispatch failures are logged; the stage-job rows created
+            # by the worker task keep the upload reconcilable.
+            start_ingestion_pipeline_task.delay(upload_id)
+        except Exception:
+            logger.warning("ingestion_pipeline_dispatch_failed", upload_id=upload_id)
 
     def _cleanup_upload(self, upload: Upload, key: str) -> None:
         try:

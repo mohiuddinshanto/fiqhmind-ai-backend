@@ -3,7 +3,9 @@
 Proves the orchestration primitives in `app/tasks/book.py`:
 
 - the per-book chain/group composition
-  `extraction → chunking → group(embed, index)`, and
+  `extraction → metadata → chunking → group(embed, index)`,
+- the automatic pipeline dispatcher (`start_ingestion_pipeline_task`) that
+  creates the stage jobs and kicks the graph off after an upload, and
 - child-failure propagation: a raising leaf fires the `fail_book_jobs`
   errback, which fails every active job of the book (parent included) and
   marks the upload failed.
@@ -74,7 +76,7 @@ def _canvas_kind(signature) -> str:
 
 
 def test_book_graph_chain_structure() -> None:
-    """The full book graph is extract → chunk → group(embed, index)."""
+    """The full book graph is extract → metadata → chunk → group(embed, index)."""
     graph = book_module.build_book_graph(
         extraction_job_id="extraction-id",
         upload_id="upload-id",
@@ -84,14 +86,16 @@ def test_book_graph_chain_structure() -> None:
     )
 
     assert _canvas_kind(graph) == "_chain"
-    assert [task.task for task in graph.tasks[:2]] == [
+    assert [task.task for task in graph.tasks[:3]] == [
         "app.tasks.ingestion.extract_pdf_task",
+        "app.tasks.ingestion.run_metadata_task",
         "app.tasks.ingestion.run_chunking_task",
     ]
     assert tuple(graph.tasks[0].args) == ("extraction-id", "upload-id")
-    assert tuple(graph.tasks[1].args) == ("chunking-id", "upload-id", "metadata-id")
+    assert tuple(graph.tasks[1].args) == ("metadata-id", "upload-id")
+    assert tuple(graph.tasks[2].args) == ("chunking-id", "upload-id", "metadata-id")
 
-    indexing_stage = graph.tasks[2]
+    indexing_stage = graph.tasks[3]
     assert indexing_stage.task == "celery.group"
     assert {task.task for task in indexing_stage.tasks} == {
         "app.tasks.ingestion.embed_book_chunks",
@@ -272,3 +276,89 @@ def test_process_book_task_skips_unknown_upload(session: Session, monkeypatch) -
 
     assert applied == []
     assert len(IngestionJobRepository(session).get_multi()) == 0
+
+
+def test_start_ingestion_pipeline_creates_stage_jobs_and_dispatches_graph(
+    session: Session, monkeypatch
+) -> None:
+    """The auto-ingestion task creates missing stage jobs and applies the graph."""
+    upload = _make_upload(session)
+    initial = _make_job(session, upload.id, "initial", status="queued")
+    session.commit()
+
+    applied: list[tuple] = []
+    captured: dict[str, str] = {}
+
+    class FakeGraph:
+        def apply_async(self, *args, **kwargs) -> None:
+            applied.append((args, kwargs))
+
+    def build_book_graph(**kwargs):
+        captured.update(kwargs)
+        return FakeGraph()
+
+    monkeypatch.setattr(book_module, "build_book_graph", build_book_graph)
+    monkeypatch.setattr(book_module, "get_session_factory", _eager_session_factory(session))
+
+    celery_app.conf.task_always_eager = True
+    try:
+        book_module.start_ingestion_pipeline_task.delay(upload.id)
+    finally:
+        celery_app.conf.task_always_eager = False
+
+    session.expire_all()
+    repo = IngestionJobRepository(session)
+    metadata = repo.find_for_upload(upload.id, "metadata")
+    chunking = repo.find_for_upload(upload.id, "chunking")
+    indexing = repo.find_for_upload(upload.id, "indexing")
+    assert metadata is not None
+    assert chunking is not None
+    assert indexing is not None
+    assert captured == {
+        "extraction_job_id": initial.id,
+        "upload_id": upload.id,
+        "chunking_job_id": chunking.id,
+        "indexing_job_id": indexing.id,
+        "metadata_job_id": metadata.id,
+    }
+    assert len(repo.get_multi()) == 4  # initial + metadata + chunking + indexing
+    assert len(applied) == 1
+
+
+def test_start_ingestion_pipeline_reuses_existing_stage_jobs(
+    session: Session, monkeypatch
+) -> None:
+    """A re-run reuses existing stage jobs instead of duplicating rows."""
+    upload = _make_upload(session)
+    metadata = _make_job(session, upload.id, "metadata", status="completed")
+    _make_job(session, upload.id, "initial", status="queued")
+    session.commit()
+
+    applied: list[tuple] = []
+    captured: dict[str, str] = {}
+
+    class FakeGraph:
+        def apply_async(self, *args, **kwargs) -> None:
+            applied.append((args, kwargs))
+
+    def build_book_graph(**kwargs):
+        captured.update(kwargs)
+        return FakeGraph()
+
+    monkeypatch.setattr(book_module, "build_book_graph", build_book_graph)
+    monkeypatch.setattr(book_module, "get_session_factory", _eager_session_factory(session))
+
+    celery_app.conf.task_always_eager = True
+    try:
+        book_module.start_ingestion_pipeline_task.delay(upload.id)
+    finally:
+        celery_app.conf.task_always_eager = False
+
+    session.expire_all()
+    repo = IngestionJobRepository(session)
+    assert repo.find_for_upload(upload.id, "metadata").id == metadata.id
+    assert repo.find_for_upload(upload.id, "chunking") is not None
+    assert repo.find_for_upload(upload.id, "indexing") is not None
+    assert len(repo.get_multi()) == 4  # existing initial + metadata, new chunking + indexing
+    assert captured["metadata_job_id"] == metadata.id
+    assert len(applied) == 1

@@ -25,6 +25,7 @@ class FakeTask:
 @pytest.fixture(autouse=True)
 def _no_celery(monkeypatch) -> None:
     monkeypatch.setattr(uploads_module, "mark_queued", FakeTask())
+    monkeypatch.setattr(uploads_module, "start_ingestion_pipeline_task", FakeTask())
 
 
 @pytest.fixture()

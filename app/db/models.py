@@ -427,7 +427,7 @@ class IngestionJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     book: Mapped[Book | None] = relationship(back_populates="ingestion_jobs")
-    upload: Mapped["Upload | None"] = relationship(back_populates="ingestion_job")
+    upload: Mapped["Upload | None"] = relationship(back_populates="ingestion_jobs")
     errors: Mapped[list["IngestionError"]] = relationship(
         back_populates="job", cascade="all, delete-orphan"
     )
@@ -479,9 +479,7 @@ class Upload(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     received_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text)
 
-    ingestion_job: Mapped["IngestionJob | None"] = relationship(
-        back_populates="upload", uselist=False
-    )
+    ingestion_jobs: Mapped[list["IngestionJob"]] = relationship(back_populates="upload")
     logs: Mapped[list["UploadLog"]] = relationship(
         back_populates="upload", cascade="all, delete-orphan"
     )
