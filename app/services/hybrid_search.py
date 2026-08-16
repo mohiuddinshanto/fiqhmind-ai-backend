@@ -43,11 +43,19 @@ RRF_K = 60
 
 @dataclass(frozen=True)
 class SearchHit:
-    """One fused result: a chunk id plus its payload and RRF score."""
+    """One fused result: a chunk id plus its payload and RRF score.
+
+    `dense_score` carries the raw dense cosine similarity of the best dense
+    match (None when the chunk only matched the sparse side). The RRF score is
+    rank-based and bounded well below 1.0, so the deterministic rerank layer
+    uses the raw dense score as the semantic-evidence signal — the closest
+    dependency-free proxy for the intended cross-encoder.
+    """
 
     chunk_id: str
     score: float
     payload: dict = field(default_factory=dict)
+    dense_score: float | None = None
 
 
 @dataclass(frozen=True)
@@ -81,11 +89,13 @@ def rrf_fuse(
 
     scores: dict[str, float] = defaultdict(float)
     payloads: dict[str, dict] = {}
+    dense_scores: dict[str, float] = {}
     for rank, point in enumerate(dense, start=1):
         chunk_id = _chunk_id_of(point)
         scores[chunk_id] += alpha / (k + rank)
         if point.payload:
             payloads.setdefault(chunk_id, point.payload)
+        dense_scores.setdefault(chunk_id, point.score)
     for rank, point in enumerate(sparse, start=1):
         chunk_id = _chunk_id_of(point)
         scores[chunk_id] += (1.0 - alpha) / (k + rank)
@@ -96,7 +106,12 @@ def rrf_fuse(
     if limit is not None:
         ordered = ordered[:limit]
     return [
-        SearchHit(chunk_id=chunk_id, score=score, payload=payloads.get(chunk_id, {}))
+        SearchHit(
+            chunk_id=chunk_id,
+            score=score,
+            payload=payloads.get(chunk_id, {}),
+            dense_score=dense_scores.get(chunk_id),
+        )
         for chunk_id, score in ordered
     ]
 

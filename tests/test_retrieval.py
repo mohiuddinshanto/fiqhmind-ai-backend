@@ -158,6 +158,55 @@ def test_evidence_floor_drops_below_threshold(session: Session) -> None:
     assert [chunk.chunk_id for chunk in result.chunks] == ["c1"]
 
 
+def test_dense_score_lifts_semantic_hit_above_floor(session: Session) -> None:
+    """A lexically-disjoint but semantically-strong hit (dense cosine above the
+    floor) must count as evidence — the deterministic proxy for the cross-
+    encoder that the RRF score alone can never reach."""
+    hits = [
+        SearchHit(
+            chunk_id="author",
+            score=0.015,
+            payload=_payload("author", text="শায়খ মুহাম্মাদ আওয়ামাহ রচিত কিতাব"),
+            dense_score=0.12,
+        ),
+        SearchHit(
+            chunk_id="other",
+            score=0.01,
+            payload=_payload("other", text="অন্য বিষয়ের আলোচনা", topic="موضوع"),
+        ),
+    ]
+    runner = _runner(
+        session,
+        FakeHybrid(hits),
+        StubReranker([0.0, 0.0]),
+        retrieval_evidence_floor=0.05,
+    )
+
+    result = runner.search("এই কিতাবের লেখক কে")
+
+    assert result.evidence_sufficient is True
+    assert [chunk.chunk_id for chunk in result.chunks] == ["author"]
+    assert result.chunks[0].rerank_score == pytest.approx(0.12)
+
+
+def test_sparse_only_hit_without_dense_score_stays_lexical(session: Session) -> None:
+    hits = [
+        SearchHit(
+            chunk_id="c1",
+            score=0.02,
+            payload=_payload("c1"),
+            dense_score=None,
+        )
+    ]
+    runner = _runner(
+        session, FakeHybrid(hits), StubReranker([0.7]), retrieval_evidence_floor=0.05
+    )
+
+    result = runner.search("الوضوء")
+
+    assert result.chunks[0].rerank_score == pytest.approx(0.7)
+
+
 def test_all_below_floor_is_insufficient_evidence(session: Session) -> None:
     hits = [_hit("c1", score=0.02), _hit("c2", score=0.01)]
     runner = _runner(

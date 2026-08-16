@@ -291,7 +291,14 @@ class RetrievalRunner:
         canonical_arabic: str,
         original_query: str,
     ) -> list[_RankedHit]:
-        """Step 7: score all hits against both queries; keep the max per hit."""
+        """Step 7: score all hits against both queries; keep the max per hit.
+
+        The max includes the raw dense cosine score (`hit.dense_score`): the
+        RRF score is rank-based (bounded well below the evidence floor) and the
+        deterministic Jaccard scorer misses semantically-related-but-lexically
+        disjoint passages, so the dense similarity is the semantic-evidence
+        signal that keeps the floor reachable until the cross-encoder lands.
+        """
         if not merged:
             return []
         texts = [hit.payload.get("text", "") or "" for hit in merged]
@@ -304,7 +311,7 @@ class RetrievalRunner:
         original_scores = self._reranker.score(original_query, texts)
         ranked = [
             _RankedHit(
-                max_score=max(a_score, o_score),
+                max_score=max(a_score, o_score, hit.dense_score or 0.0),
                 arabic_score=a_score,
                 original_score=o_score,
                 hit=hit,

@@ -98,3 +98,40 @@ def test_store_exposes_client_and_collection(distance) -> None:
     store = QdrantStore(_mock_client(), collection="fiqh_chunks", distance=distance)
     assert store.collection == "fiqh_chunks"
     assert store.client is not None
+
+
+def _query_response(points: list[dict]) -> SimpleNamespace:
+    return SimpleNamespace(points=[SimpleNamespace(**point) for point in points])
+
+
+def test_search_dense_omits_using() -> None:
+    client = _mock_client()
+    client.query_points.return_value = _query_response(
+        [{"id": "u1", "score": 0.5, "payload": {"chunk_id": "c1"}}]
+    )
+    store = QdrantStore(client)
+
+    points = store.search_dense([0.1] * 4, limit=5)
+
+    assert points[0].payload == {"chunk_id": "c1"}
+    assert client.query_points.call_args.kwargs["collection_name"] == "fiqh_chunks"
+    assert "using" not in client.query_points.call_args.kwargs
+
+
+def test_search_sparse_routes_with_named_sparse_vector() -> None:
+    """Sparse queries must pass `using="text"` — the collection's sparse vector
+    name — or Qdrant rejects them with "Conversion between sparse and regular
+    vectors failed"."""
+    client = _mock_client()
+    client.query_points.return_value = _query_response(
+        [{"id": "u1", "score": 8.0, "payload": {"chunk_id": "c1"}}]
+    )
+    store = QdrantStore(client)
+
+    sparse = models.SparseVector(indices=[1, 2], values=[1.0, 1.0])
+    points = store.search_sparse(sparse, limit=5)
+
+    assert points[0].payload == {"chunk_id": "c1"}
+    kwargs = client.query_points.call_args.kwargs
+    assert kwargs["using"] == qdrant_module.SPARSE_VECTOR_NAME
+    assert kwargs["query"] == sparse

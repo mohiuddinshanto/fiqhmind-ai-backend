@@ -149,8 +149,14 @@ class QdrantStore:
         limit: int,
         filter_: models.Filter | None = None,
     ) -> list[models.ScoredPoint]:
-        """Lexical search against the named sparse vector."""
-        return self._query(vector, limit=limit, filter_=filter_)
+        """Lexical search against the named sparse vector.
+
+        The collection stores the sparse vector under `SPARSE_VECTOR_NAME`
+        (`text`), so the query must be routed with `using=` that name — without
+        it Qdrant rejects the bare sparse query with "Conversion between sparse
+        and regular vectors failed".
+        """
+        return self._query(vector, limit=limit, filter_=filter_, using=SPARSE_VECTOR_NAME)
 
     def _query(
         self,
@@ -158,14 +164,25 @@ class QdrantStore:
         *,
         limit: int,
         filter_: models.Filter | None,
+        using: str | None = None,
     ) -> list[models.ScoredPoint]:
-        response = self._client.query_points(
-            collection_name=self._collection,
-            query=query,
-            limit=limit,
-            query_filter=filter_,
-            with_payload=True,
-        )
+        if using is not None:
+            response = self._client.query_points(
+                collection_name=self._collection,
+                query=query,
+                limit=limit,
+                query_filter=filter_,
+                with_payload=True,
+                using=using,
+            )
+        else:
+            response = self._client.query_points(
+                collection_name=self._collection,
+                query=query,
+                limit=limit,
+                query_filter=filter_,
+                with_payload=True,
+            )
         return list(response.points) if response is not None else []
 
 

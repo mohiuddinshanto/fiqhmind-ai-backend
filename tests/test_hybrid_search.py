@@ -15,8 +15,10 @@ from app.services.hybrid_search import (
 )
 
 
-def _point(point_id: str, payload: dict | None = None) -> SimpleNamespace:
-    return SimpleNamespace(id=point_id, score=1.0, payload=payload or {})
+def _point(
+    point_id: str, payload: dict | None = None, score: float = 1.0
+) -> SimpleNamespace:
+    return SimpleNamespace(id=point_id, score=score, payload=payload or {})
 
 
 DENSE = [_point("a"), _point("b"), _point("c")]
@@ -64,6 +66,20 @@ def test_rrf_fuse_carries_payloads() -> None:
 
     assert hits[0].payload == {"region": "footer"}
     assert hits[1].payload == {"region": "main"}
+
+
+def test_rrf_fuse_carries_dense_cosine_scores() -> None:
+    """The raw dense cosine score must survive fusion so the deterministic
+    rerank layer can use it as the semantic-evidence signal."""
+    dense = [_point("a", {"chunk_id": "a"}, score=0.9), _point("b", {"chunk_id": "b"}, score=0.4)]
+    sparse = [_point("b", {"chunk_id": "b"}, score=9.0), _point("c", {"chunk_id": "c"}, score=7.0)]
+
+    hits = rrf_fuse(dense, sparse, k=60, alpha=0.5)
+
+    by_id = {hit.chunk_id: hit for hit in hits}
+    assert by_id["a"].dense_score == pytest.approx(0.9)
+    assert by_id["b"].dense_score == pytest.approx(0.4)
+    assert by_id["c"].dense_score is None  # sparse-only hit carries no dense score
 
 
 def test_rrf_fuse_keys_on_payload_chunk_id_not_point_id() -> None:
