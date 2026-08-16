@@ -64,8 +64,8 @@ def build_indexing_stage(job_id: str, upload_id: str, chunking_job_id: str):
     """
     errback = _book_errback(upload_id, job_id)
     return group(
-        embed_chunks_task.s(upload_id, chunking_job_id).set(link_error=errback),
-        run_indexing_task.s(job_id, upload_id, chunking_job_id).set(link_error=errback),
+        embed_chunks_task.si(upload_id, chunking_job_id).set(link_error=errback),
+        run_indexing_task.si(job_id, upload_id, chunking_job_id).set(link_error=errback),
     )
 
 
@@ -105,10 +105,10 @@ def build_book_graph(
         extract_pdf_task.s(extraction_job_id, upload_id).set(
             link_error=_book_errback(upload_id, extraction_job_id)
         ),
-        run_metadata_task.s(metadata_job_id, upload_id).set(
+        run_metadata_task.si(metadata_job_id, upload_id).set(
             link_error=_book_errback(upload_id, metadata_job_id)
         ),
-        run_chunking_task.s(chunking_job_id, upload_id, metadata_job_id).set(
+        run_chunking_task.si(chunking_job_id, upload_id, metadata_job_id).set(
             link_error=_book_errback(upload_id, chunking_job_id)
         ),
         build_indexing_stage(indexing_job_id, upload_id, chunking_job_id),

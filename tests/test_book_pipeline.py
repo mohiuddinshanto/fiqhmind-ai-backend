@@ -113,6 +113,83 @@ def test_book_graph_chain_structure() -> None:
     )
 
 
+def test_book_graph_executes_without_chain_result_threading(monkeypatch) -> None:
+    """Regression: Celery must not inject the previous result into chain links.
+
+    `run_metadata_task` and `run_chunking_task` are called with `.si()` (immutable
+    signatures) precisely so Celery does not prepend the previous stage's return
+    value to their arguments. A mutable `.s()` link makes the metadata stage
+    receive `(<extract result>, metadata_job_id, upload_id)` — the real-world
+    `run_metadata_task(job_id, upload_id)` signature failure seen in production.
+    This test executes the full graph eagerly (not just inspects its shape) so a
+    future mutable-link regression is caught by Celery itself.
+    """
+    calls: list[tuple] = []
+
+    def make_bound(name: str, returns: object):
+        def stub(self, *args, **kwargs) -> object:
+            calls.append((name, args, kwargs))
+            return returns
+
+        return celery_app.task(name=name, bind=True)(stub)
+
+    def make_plain(name: str, returns: object):
+        def stub(*args, **kwargs) -> object:
+            calls.append((name, args, kwargs))
+            return returns
+
+        return celery_app.task(name=name, bind=False)(stub)
+
+    extract_stub = make_bound("app.tasks.book.regr_extract", {"stage": "extraction"})
+    metadata_stub = make_bound("app.tasks.book.regr_metadata", {"stage": "metadata"})
+    chunking_stub = make_bound("app.tasks.book.regr_chunking", {"stage": "chunking"})
+    embed_stub = make_plain("app.tasks.book.regr_embed", {"stage": "embed"})
+    index_stub = make_bound("app.tasks.book.regr_index", {"stage": "index"})
+
+    monkeypatch.setattr(book_module, "extract_pdf_task", extract_stub)
+    monkeypatch.setattr(book_module, "run_metadata_task", metadata_stub)
+    monkeypatch.setattr(book_module, "run_chunking_task", chunking_stub)
+    monkeypatch.setattr(book_module, "embed_chunks_task", embed_stub)
+    monkeypatch.setattr(book_module, "run_indexing_task", index_stub)
+
+    celery_app.conf.task_always_eager = True
+    try:
+        graph = book_module.build_book_graph(
+            extraction_job_id="extraction-id",
+            upload_id="upload-id",
+            chunking_job_id="chunking-id",
+            indexing_job_id="indexing-id",
+            metadata_job_id="metadata-id",
+        )
+        result = graph.apply_async()
+    finally:
+        celery_app.conf.task_always_eager = False
+
+    assert result.get() == [{"stage": "embed"}, {"stage": "index"}]
+    by_name = {name: args for name, args, _ in calls}
+    assert tuple(by_name["app.tasks.book.regr_extract"]) == ("extraction-id", "upload-id")
+    assert tuple(by_name["app.tasks.book.regr_metadata"]) == ("metadata-id", "upload-id")
+    assert tuple(by_name["app.tasks.book.regr_chunking"]) == (
+        "chunking-id",
+        "upload-id",
+        "metadata-id",
+    )
+    assert tuple(by_name["app.tasks.book.regr_embed"]) == ("upload-id", "chunking-id")
+    assert tuple(by_name["app.tasks.book.regr_index"]) == (
+        "indexing-id",
+        "upload-id",
+        "chunking-id",
+    )
+
+    ordered = [name for name, _, _ in calls]
+    assert ordered[:3] == [
+        "app.tasks.book.regr_extract",
+        "app.tasks.book.regr_metadata",
+        "app.tasks.book.regr_chunking",
+    ]
+    assert set(ordered[3:]) == {"app.tasks.book.regr_embed", "app.tasks.book.regr_index"}
+
+
 def test_stage_graphs_compose_expected_primitives() -> None:
     """Each endpoint dispatches the right primitive with the right arguments."""
     extraction = book_module.build_extraction_stage("extraction-id", "upload-id")
