@@ -1,3 +1,5 @@
+import uuid
+
 import structlog
 from qdrant_client import QdrantClient, models
 
@@ -9,9 +11,24 @@ COLLECTION_NAME = "fiqh_chunks"
 DENSE_VECTOR_SIZE = 1024  # BGE-M3
 DENSE_DISTANCE = models.Distance.COSINE
 SPARSE_VECTOR_NAME = "text"
-PAYLOAD_INDEX_FIELDS = ("book_id", "volume", "region", "verified")
+# Every payload field used as a filter must carry a payload index: book/volume/
+# region/verified are query-time filters (hybrid search) and upload_id is the
+# idempotent-re-index scope (delete-by-filter before re-upsert).
+PAYLOAD_INDEX_FIELDS = ("book_id", "volume", "region", "verified", "upload_id")
 
 DENSE_HNSW_CONFIG = models.HnswConfigDiff(m=32, ef_construct=128)
+
+
+def point_id_for_chunk(chunk_id: str) -> str:
+    """Deterministic Qdrant point id for a content-addressed `chunk_id`.
+
+    Qdrant point ids must be unsigned integers or UUIDs, so the SHA-256
+    `chunk_id` (64 hex chars) cannot be used verbatim. `uuid5` maps it to a
+    stable UUID: the same chunk always resolves to the same point, so a re-run
+    idempotently overwrites the same point (the Phase 8 idempotency contract).
+    The real `chunk_id` stays in the payload for retrieval and health checks.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, chunk_id))
 
 
 def create_qdrant_client(settings: Settings) -> QdrantClient:

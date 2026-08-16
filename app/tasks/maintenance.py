@@ -23,7 +23,7 @@ import structlog
 
 from app.core.asyncio_utils import run_coroutine
 from app.core.postgres import get_session_factory
-from app.core.qdrant import get_qdrant_store
+from app.core.qdrant import get_qdrant_store, point_id_for_chunk
 from app.core.redis import get_redis
 from app.db.repositories import ChunkRepository
 from app.services.cache import CacheService
@@ -67,7 +67,7 @@ def provider_health_check() -> dict:
 def index_health_check() -> dict:
     """Reconcile the Qdrant index against the Postgres chunks table (weekly).
 
-    Detects orphan points (vectors whose chunk_id has no Postgres row), chunks
+    Detects orphan points (vectors whose point id has no Postgres chunk), chunks
     that were never indexed (Postgres chunk_id with no Qdrant point), and
     duplicate normalized texts. Returns a report; issues are logged as warnings
     so the task result doubles as an alert surface.
@@ -83,26 +83,33 @@ def index_health_check() -> dict:
             logger.warning("index_health_qdrant_unavailable", error=str(exc))
             qdrant_ids = set()
 
+        # Qdrant point ids are UUIDs derived from the content-addressed chunk_id
+        # (`point_id_for_chunk`); map Postgres chunk_ids to that same id space.
         pg_ids = set(chunk_repo.list_all_ids())
-        orphans = sorted(qdrant_ids - pg_ids)
-        never_indexed = sorted(pg_ids - qdrant_ids)
+        point_id_by_chunk = {point_id_for_chunk(chunk_id): chunk_id for chunk_id in pg_ids}
+        orphan_point_ids = sorted(qdrant_ids - set(point_id_by_chunk))
+        never_indexed = sorted(
+            chunk_id
+            for point_id, chunk_id in point_id_by_chunk.items()
+            if point_id not in qdrant_ids
+        )
         duplicates = chunk_repo.list_duplicate_normalized_texts()
 
         report = {
             "qdrant_point_count": len(qdrant_ids),
             "pg_chunk_count": len(pg_ids),
-            "orphan_point_count": len(orphans),
-            "orphan_points": orphans[:100],
+            "orphan_point_count": len(orphan_point_ids),
+            "orphan_points": orphan_point_ids[:100],
             "never_indexed_count": len(never_indexed),
             "never_indexed": never_indexed[:100],
             "duplicate_count": len(duplicates),
             "duplicates": duplicates[:100],
         }
-        if orphans:
+        if orphan_point_ids:
             logger.warning(
                 "index_health_orphan_points",
-                count=len(orphans),
-                sample=orphans[:10],
+                count=len(orphan_point_ids),
+                sample=orphan_point_ids[:10],
             )
         if never_indexed:
             logger.warning(

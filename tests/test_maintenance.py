@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 import app.services.generation.providers as providers_module
 import app.tasks.maintenance as maintenance_module
 from app.core.config import Settings
+from app.core.qdrant import point_id_for_chunk
 from app.db.base import Base
 from app.db.models import Chunk
 from app.services.cache import CacheService
@@ -87,8 +88,10 @@ def test_index_health_check_reports_orphans_never_indexed_duplicates(
     )
     session.commit()
 
-    # Qdrant has healthy1 + an orphan point that has no Postgres row.
-    qdrant_ids = ["healthy1", "orphan1"]
+    # Qdrant point ids are UUIDs derived from chunk_id: healthy1's point exists,
+    # plus an orphan point id with no Postgres row.
+    orphan_point_id = "11111111-1111-4111-8111-111111111111"
+    qdrant_ids = [point_id_for_chunk("healthy1"), orphan_point_id]
     monkeypatch.setattr(
         maintenance_module,
         "get_qdrant_store",
@@ -102,7 +105,7 @@ def test_index_health_check_reports_orphans_never_indexed_duplicates(
 
     assert report["qdrant_point_count"] == 2
     assert report["pg_chunk_count"] == 5
-    assert report["orphan_points"] == ["orphan1"]
+    assert report["orphan_points"] == [orphan_point_id]
     assert report["never_indexed"] == ["dup1", "dup2", "unindexed1", "unindexed2"]
     assert report["duplicate_count"] == 1
     assert report["duplicates"] == [("same text", 2)]

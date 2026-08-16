@@ -82,12 +82,12 @@ def rrf_fuse(
     scores: dict[str, float] = defaultdict(float)
     payloads: dict[str, dict] = {}
     for rank, point in enumerate(dense, start=1):
-        chunk_id = str(point.id)
+        chunk_id = _chunk_id_of(point)
         scores[chunk_id] += alpha / (k + rank)
         if point.payload:
             payloads.setdefault(chunk_id, point.payload)
     for rank, point in enumerate(sparse, start=1):
-        chunk_id = str(point.id)
+        chunk_id = _chunk_id_of(point)
         scores[chunk_id] += (1.0 - alpha) / (k + rank)
         if point.payload:
             payloads.setdefault(chunk_id, point.payload)
@@ -99,6 +99,16 @@ def rrf_fuse(
         SearchHit(chunk_id=chunk_id, score=score, payload=payloads.get(chunk_id, {}))
         for chunk_id, score in ordered
     ]
+
+
+def _chunk_id_of(point: ScoredPoint) -> str:
+    """The chunk identity of a point: its payload `chunk_id` when present.
+
+    Qdrant point ids are UUIDs (`point_id_for_chunk`); the canonical chunk id
+    lives in the payload, so retrieval keys on that and only falls back to the
+    point id for points without a payload.
+    """
+    return (point.payload or {}).get("chunk_id") or str(point.id)
 
 
 def build_payload_filter(

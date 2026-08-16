@@ -66,6 +66,23 @@ def test_rrf_fuse_carries_payloads() -> None:
     assert hits[1].payload == {"region": "main"}
 
 
+def test_rrf_fuse_keys_on_payload_chunk_id_not_point_id() -> None:
+    """Qdrant point ids are UUIDs (`point_id_for_chunk`); the canonical chunk id
+    lives in the payload, so fusion must key on it, not `point.id`."""
+    dense = [
+        _point("uuid-point-1", {"chunk_id": "a", "region": "main"}),
+        _point("uuid-point-2", {"chunk_id": "b", "region": "footer"}),
+    ]
+    sparse = [
+        _point("uuid-point-2", {"chunk_id": "b", "region": "footer"}),
+        _point("uuid-point-3", {"chunk_id": "c", "region": "main"}),
+    ]
+
+    hits = rrf_fuse(dense, sparse, k=60, alpha=0.5)
+
+    assert [hit.chunk_id for hit in hits] == ["b", "a", "c"]
+
+
 def test_rrf_fuse_rejects_invalid_alpha() -> None:
     with pytest.raises(ValueError):
         rrf_fuse(DENSE, SPARSE, alpha=1.5)

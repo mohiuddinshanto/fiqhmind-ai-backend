@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 import app.tasks.ingestion as ingestion_module
 from app.core.exceptions import IndexConflictError
-from app.core.qdrant import SPARSE_VECTOR_NAME
+from app.core.qdrant import SPARSE_VECTOR_NAME, point_id_for_chunk
 from app.core.storage import LocalStorageProvider
 from app.db.base import Base
 from app.db.models import Chunk, IngestionJob, Upload
@@ -156,7 +156,10 @@ def test_runner_indexes_every_chunk_with_contract_payload(
     points = [point for batch in store.upsert_batches for point in batch]
     assert len(points) == 4
     ids = {point.id for point in points}
-    assert ids == {chunk.chunk_id for chunk in ChunkRepository(session).list_by_job(chunk_job.id)}
+    assert ids == {
+        point_id_for_chunk(chunk.chunk_id)
+        for chunk in ChunkRepository(session).list_by_job(chunk_job.id)
+    }
 
     point = points[0]
     assert set(point.vector) == {"", SPARSE_VECTOR_NAME}
@@ -243,7 +246,9 @@ def test_runner_embeds_in_batches_preserving_order(
 
     # Point order mirrors input chunk order (ordering preserved end to end).
     points = [point for batch in store.upsert_batches for point in batch]
-    assert [point.id for point in points] == [chunk.chunk_id for chunk in chunks]
+    assert [point.id for point in points] == [
+        point_id_for_chunk(chunk.chunk_id) for chunk in chunks
+    ]
 
 
 def test_runner_fails_without_chunking_job(
@@ -448,4 +453,6 @@ def test_runner_embeds_default_128_batches_until_remainder(
     assert embedder.texts == [chunk.raw_text for chunk in chunks]
     points = [point for batch in store.upsert_batches for point in batch]
     assert len(points) == 260
-    assert [point.id for point in points] == [chunk.chunk_id for chunk in chunks]
+    assert [point.id for point in points] == [
+        point_id_for_chunk(chunk.chunk_id) for chunk in chunks
+    ]

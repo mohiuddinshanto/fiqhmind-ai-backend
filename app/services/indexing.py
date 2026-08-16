@@ -8,9 +8,10 @@ The embedding model behind the vectors is the Phase 8 `Embedder` interface
 
 Idempotency matches the repository pattern: before indexing, every point for
 the upload is deleted by an `upload_id` payload filter, then all chunks are
-re-upserted (point id = `chunk_id`, so identical content overwrites). Re-runs
-therefore never leave stale vectors behind. Qdrant has no transactions, so a
-failed run retries the whole delete-then-upsert cycle.
+re-upserted (point id = `point_id_for_chunk(chunk_id)`, so identical content
+overwrites the same point). Re-runs therefore never leave stale vectors behind.
+Qdrant has no transactions, so a failed run retries the whole delete-then-upsert
+cycle.
 """
 
 from dataclasses import dataclass
@@ -22,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.exceptions import IndexConflictError
-from app.core.qdrant import SPARSE_VECTOR_NAME, QdrantStore
+from app.core.qdrant import SPARSE_VECTOR_NAME, QdrantStore, point_id_for_chunk
 from app.db.models import Chunk, IngestionJob, MetadataDocument, Upload
 from app.db.repositories import ChunkRepository, IngestionJobRepository, MetadataRepository
 from app.services.cache import CacheService
@@ -213,7 +214,7 @@ class IndexingRunner:
             year=meta.get("publication_year"),
         )
         return models.PointStruct(
-            id=chunk.chunk_id,
+            id=point_id_for_chunk(chunk.chunk_id),
             vector={
                 "": embedding.dense,
                 SPARSE_VECTOR_NAME: models.SparseVector(

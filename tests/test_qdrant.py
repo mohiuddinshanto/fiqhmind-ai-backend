@@ -50,13 +50,19 @@ def test_ensure_collection_adds_missing_indexes() -> None:
 
     store.ensure_collection()
 
-    assert client.create_payload_index.call_count == 3
+    assert client.create_payload_index.call_count == len(qdrant_module.PAYLOAD_INDEX_FIELDS) - 1
     created = [call.kwargs["field_name"] for call in client.create_payload_index.call_args_list]
     assert "book_id" not in created
 
 
 def test_collection_uses_documented_payload_index_fields() -> None:
-    assert set(qdrant_module.PAYLOAD_INDEX_FIELDS) == {"book_id", "volume", "region", "verified"}
+    assert set(qdrant_module.PAYLOAD_INDEX_FIELDS) == {
+        "book_id",
+        "volume",
+        "region",
+        "verified",
+        "upload_id",
+    }
 
 
 def test_check_qdrant_health(monkeypatch) -> None:
