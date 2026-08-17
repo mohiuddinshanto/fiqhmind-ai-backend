@@ -378,7 +378,11 @@ def test_synthesizer_builds_grounded_answer() -> None:
         "الوضوء شرط الصلاة",
     ]
     assert answer.answer_language == "bn"
-    assert "[EVIDENCE_1]" in answer.explanation.html
+    # The user-facing explanation is a concise, fact-grounded answer — never a
+    # raw dump of every evidence block.
+    assert "[EVIDENCE_" not in answer.explanation.html
+    assert answer.explanation.html.startswith("<p><b>উত্তর:</b>")
+    assert "উৎস:" in answer.explanation.html
     assert answer.confidence.level == "high"
 
 

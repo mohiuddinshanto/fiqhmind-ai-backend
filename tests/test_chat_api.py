@@ -1,6 +1,7 @@
 """Tests for the Phase 10 chat SSE endpoint (POST /api/v1/chat)."""
 
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -379,3 +380,278 @@ def test_chat_rate_limited_per_ip_with_retry_after(client: TestClient, monkeypat
     assert response.status_code == 429
     assert response.json()["error"]["code"] == "rate_limit_exceeded"
     assert int(response.headers["Retry-After"]) > 0
+
+
+# ------------------------------------------------------------------
+# DeterministicSynthesizer concise-answer regression tests
+# ------------------------------------------------------------------
+
+_AUTHOR_CHUNK_TEXT = (
+    "Kitab: بین یدی الكتاب\n"
+    "Topic: ১. ভূমিকা\n\n"
+    "শায়খ মুহাম্মাদ আওয়ামাহ রচিত 'আছারুল হাদীসিশ শরীফ ফী "
+    "ইখতিলাফিল আইম্মাতিল ফুকাহা' নামক একটি গুরুত্বপূর্ণ গ্রন্থ।"
+)
+_TITLE_CHUNK_TEXT = (
+    "Kitab: بین یدی الكتاب\n"
+    "Topic: ১. ভূমিকা\n\n"
+    "আছারুল হাদীস প্রশ্নোত্তর — এটি একটি গুরুত্বপূর্ণ ফিকহী গ্রন্থ।"
+)
+_GENERAL_CHUNK_TEXT = (
+    "Kitab: بین یدی الكتاب\n"
+    "Topic: মতভেদ\n\n"
+    "ইমামগণ হাদিসকে সুন্নাহর মূল উৎস বলে মান্য করেছেন।"
+)
+
+
+class BengaliFakeStore:
+    """Store returning Bengali author / title / general evidence chunks."""
+
+    def __init__(self, chunks=None):
+        self._chunks = chunks or [
+            SimpleNamespace(
+                id="author-c1",
+                score=0.9,
+                payload={
+                    "chunk_id": "author-c1",
+                    "text": _AUTHOR_CHUNK_TEXT,
+                    "book_name": "আছারুল হাদীস প্রশ্নোত্তর",
+                    "volume": None,
+                    "printed_page_start": None,
+                    "printed_page_end": None,
+                    "topic": "ভূমিকা",
+                    "region": "main",
+                    "lang": "bn",
+                    "verified": True,
+                },
+            ),
+            SimpleNamespace(
+                id="general-c1",
+                score=0.5,
+                payload={
+                    "chunk_id": "general-c1",
+                    "text": _GENERAL_CHUNK_TEXT,
+                    "book_name": "আছারুল হাদীস প্রশ্নোত্তর",
+                    "volume": None,
+                    "printed_page_start": None,
+                    "printed_page_end": None,
+                    "topic": "মতভেদ",
+                    "region": "main",
+                    "lang": "bn",
+                    "verified": True,
+                },
+            ),
+        ]
+
+    def search_dense(self, vector, *, limit, filter_=None):
+        return self._chunks
+
+    def search_sparse(self, vector, *, limit, filter_=None):
+        return []
+
+
+def _patch_bengali_store(monkeypatch, session):
+    """Replace deps so the chat endpoint uses BengaliFakeStore."""
+    from app.api.v1 import deps
+
+    app.dependency_overrides[deps.get_db] = lambda: session
+    app.dependency_overrides[deps.get_store_dep] = lambda: BengaliFakeStore()
+
+
+# ---- Test A: Bengali author question → concise answer with author name ----
+
+
+def test_bengali_author_question_concise_answer(
+    client: TestClient, session: Session, monkeypatch
+) -> None:
+    """Author question returns a concise answer containing the author name,
+    NOT multiple [EVIDENCE_x] blocks dumped into the explanation HTML."""
+    _patch_bengali_store(monkeypatch, session)
+
+    response = client.post(
+        "/api/v1/chat",
+        json={"query": "এই কিতাবের লেখক কে", "answer_language": "bn"},
+    )
+    assert response.status_code == 200
+
+    events = _parse_sse(response.text)
+    names = [e for e, _ in events]
+    assert "error" not in names
+
+    done = next(data for name, data in events if name == "done")
+    assert done["refusal"] is None
+
+    # Reassemble explanation HTML from delta events.
+    deltas = [data["text"] for name, data in events if name == "delta"]
+    html = "".join(deltas)
+
+    # The author name must appear in the answer.
+    assert "শায়খ মুহাম্মাদ আওয়ামাহ" in html
+
+    # No [EVIDENCE_x] blocks in the user-facing explanation.
+    assert "[EVIDENCE_" not in html
+
+    # The answer should be concise — well under 500 chars for a factual answer.
+    # Strip HTML tags for a length check.
+    plain = re.sub(r"<[^>]+>", "", html).strip()
+    assert len(plain) < 500, f"Answer too long ({len(plain)} chars): {plain[:200]}..."
+
+
+# ---- Test B: Bengali book title question → concise title answer ----
+
+
+def test_bengali_title_question_concise_answer(
+    client: TestClient, session: Session, monkeypatch
+) -> None:
+    """Book title question returns the title, NOT [EVIDENCE_x] blocks."""
+    title_chunks = [
+        SimpleNamespace(
+            id="title-c1",
+            score=0.9,
+            payload={
+                "chunk_id": "title-c1",
+                "text": _TITLE_CHUNK_TEXT,
+                "book_name": "আছারুল হাদীস প্রশ্নোত্তর",
+                "volume": None,
+                "printed_page_start": None,
+                "printed_page_end": None,
+                "topic": "ভূমিকা",
+                "region": "main",
+                "lang": "bn",
+                "verified": True,
+            },
+        ),
+    ]
+    from app.api.v1 import deps
+
+    app.dependency_overrides[deps.get_db] = lambda: session
+    app.dependency_overrides[deps.get_store_dep] = lambda: BengaliFakeStore(title_chunks)
+
+    response = client.post(
+        "/api/v1/chat",
+        json={"query": "এই কিতাবের নাম কি", "answer_language": "bn"},
+    )
+    assert response.status_code == 200
+
+    events = _parse_sse(response.text)
+    done = next(data for name, data in events if name == "done")
+    assert done["refusal"] is None
+
+    deltas = [data["text"] for name, data in events if name == "delta"]
+    html = "".join(deltas)
+
+    # The book title must appear.
+    assert "আছারুল হাদীস প্রশ্নোত্তর" in html
+
+    # No [EVIDENCE_x] blocks.
+    assert "[EVIDENCE_" not in html
+
+
+# ---- Test C: Absent evidence → refusal, no hallucinated author ----
+
+
+def test_absent_evidence_refuses_without_hallucinating_author(
+    client: TestClient, session: Session, monkeypatch
+) -> None:
+    """When no author evidence is in the chunks, the system refuses
+    rather than hallucinating an author name."""
+    monkeypatch.setattr(chat_endpoints, "RetrievalRunner", type(
+        "Runner",
+        (),
+        {
+            "__init__": lambda self, *a, **kw: None,
+            "search": lambda self, query, **kw: RetrievalResult(
+                query=query,
+                canonical_arabic_query=query,
+                language="bn",
+                translated=False,
+                evidence_sufficient=False,
+                chunks=[],
+            ),
+        },
+    ))
+
+    response = client.post(
+        "/api/v1/chat",
+        json={"query": "এই কিতাবের লেখক কে", "answer_language": "bn"},
+    )
+    events = _parse_sse(response.text)
+    done = next(data for name, data in events if name == "done")
+    assert done["refusal"] is not None
+    assert done["refusal"]["reason"] == "insufficient_evidence"
+
+
+# ---- Test D: Successful answer is still cached ----
+
+
+def test_bengali_author_answer_is_cached(
+    client: TestClient, session: Session, monkeypatch
+) -> None:
+    """A successful (non-refusal) answer is served from cache on repeat."""
+    _patch_bengali_store(monkeypatch, session)
+
+    calls = {"gen": 0}
+    real_gen = chat_endpoints.get_generator
+
+    def counting_gen():
+        g = real_gen()
+        orig = g.generate
+        def counting(retrieval, *, answer_language="bn"):
+            calls["gen"] += 1
+            return orig(retrieval, answer_language=answer_language)
+        g.generate = counting
+        return g
+
+    monkeypatch.setattr(chat_endpoints, "get_generator", counting_gen)
+
+    r1 = client.post(
+        "/api/v1/chat",
+        json={"query": "এই কিতাবের লেখক কে", "answer_language": "bn"},
+    )
+    assert r1.status_code == 200
+    assert calls["gen"] == 1
+
+    r2 = client.post(
+        "/api/v1/chat",
+        json={"query": "এই কিতাবের লেখক কে", "answer_language": "bn"},
+    )
+    assert r2.status_code == 200
+    # Cache hit — no re-generation.
+    assert calls["gen"] == 1
+
+
+# ---- Test E: Refusal is NOT cached (regression guard) ----
+
+
+def test_bengali_refusal_answer_is_not_cached(
+    client: TestClient, session: Session, monkeypatch
+) -> None:
+    """Refusal answers must never be cached, preserving the cache regression fix."""
+    calls = {"runner": 0}
+
+    class CountingRunner:
+        def __init__(self, session, store, **kwargs):
+            pass
+
+        def search(self, query, *, filters=None, top_n=None):
+            calls["runner"] += 1
+            return RetrievalResult(
+                query=query,
+                canonical_arabic_query=query,
+                language="bn",
+                translated=False,
+                evidence_sufficient=False,
+                chunks=[],
+            )
+
+    monkeypatch.setattr(chat_endpoints, "RetrievalRunner", CountingRunner)
+    client.post(
+        "/api/v1/chat",
+        json={"query": "এই কিতাবের লেখক কে", "answer_language": "bn"},
+    )
+    client.post(
+        "/api/v1/chat",
+        json={"query": "এই কিতাবের লেখক কে", "answer_language": "bn"},
+    )
+    # Each call runs retrieval — the refusal is never served from cache.
+    assert calls["runner"] == 2

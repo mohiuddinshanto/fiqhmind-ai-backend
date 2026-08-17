@@ -5,9 +5,10 @@ Three deterministic pieces the LLM path also relies on:
   - `compute_confidence`: a pure function over (a) top rerank scores, (b)
     top-chunk agreement, (c) verified/region flags and (d) translation usage.
     The LLM never sets the confidence level (ARCHITECTURE §Phase 10).
-  - `DeterministicSynthesizer`: the dependency-free fallback that answers from
-    the retrieved evidence without an external model — verbatim quotes and
-    citations built strictly from the chunk payload.
+    - `DeterministicSynthesizer`: the dependency-free fallback that answers from
+    the retrieved evidence without an external model. It classifies the user's
+    question (author/title/publisher/page_count/explanation) and returns a
+    concise, fact-grounded answer — never a raw dump of every evidence block.
   - `build_refusal`: a graceful refusal for insufficient evidence or a failed
     generation attempt, always with the closest evidence shown.
 """
@@ -24,13 +25,16 @@ from app.schemas.chat import (
     Explanation,
     Refusal,
 )
+from app.services.generation.facts import ExtractedFact, extract_fact
 from app.services.retrieval import RetrievalResult, RetrievedChunk
 
 _ARABIC_SCRIPT = re.compile(r"[\u0600-\u06FF]")
 
-_EXCERPT_LIMIT = 700
 _CLOSEST_LIMIT = 300
 _QUOTE_LIMIT = 1500
+# Quotes surfaced to the user are kept short; only the strongest evidence is
+# quoted, never a raw dump of every chunk.
+_QUOTE_EXCERPT_LIMIT = 240
 
 
 def compute_confidence(chunks: list[RetrievedChunk], *, translated: bool = False) -> Confidence:
@@ -82,30 +86,22 @@ class DeterministicSynthesizer:
 
     def synthesize(self, retrieval: RetrievalResult, *, answer_language: str = "bn") -> ChatAnswer:
         chunks = retrieval.chunks[: self._max_chunks]
-        t = _templates(answer_language)
-        confidence = compute_confidence(chunks, translated=retrieval.translated)
+        if not chunks:
+            return build_refusal(retrieval, answer_language=answer_language)
 
-        explanation_html = (
-            f"<p><b>{t['lead']}</b></p>\n"
-            + "\n".join(
-                (
-                    f"<p>[EVIDENCE_{i}] <cite>{_source_label(chunk, t)}</cite>: "
-                    f"{_excerpt(chunk.text)}</p>"
-                )
-                for i, chunk in enumerate(chunks, 1)
-            )
-            + f"\n<p><b>{t['note']}</b></p>"
-        )
+        t = _templates(answer_language)
+        fact = extract_fact(chunks, query=retrieval.query, language=answer_language)
+        used = _used_chunks(chunks, fact)
 
         return ChatAnswer(
             answer_language=answer_language,
-            explanation=Explanation(type="markdown", html=explanation_html),
-            arabic_quotes=_arabic_quotes(chunks, answer_language, t),
-            citations=_citations(chunks),
-            confidence=confidence,
+            explanation=Explanation(type="markdown", html=_explanation_html(fact, used, t)),
+            arabic_quotes=_arabic_quotes(used, answer_language, t, limit=_QUOTE_EXCERPT_LIMIT),
+            citations=_citations(used),
+            confidence=_fact_confidence(used, fact, translated=retrieval.translated),
             refusal=None,
-            caveats=[t["caveat"]] if chunks else [],
-            related=_related(chunks),
+            caveats=[t["caveat"]],
+            related=_related(used),
         )
 
 
@@ -140,8 +136,64 @@ def build_refusal(
     )
 
 
+def _used_chunks(
+    chunks: list[RetrievedChunk], fact: ExtractedFact
+) -> list[RetrievedChunk]:
+    """The chunks actually cited in the answer — never the whole evidence list."""
+    if fact.fact_type == "explanation":
+        return chunks[:2]
+    if fact.chunk_id:
+        for chunk in chunks:
+            if chunk.chunk_id == fact.chunk_id:
+                return [chunk]
+    return [chunks[0]]
+
+
+def _explanation_html(
+    fact: ExtractedFact, used: list[RetrievedChunk], t: dict[str, str]
+) -> str:
+    """Concise answer: fact sentence + (fact paths only) short verbatim quote."""
+    parts = [f"<p><b>{fact.heading}:</b> {fact.answer}</p>"]
+    if fact.fact_type != "explanation" and fact.quote:
+        parts.append(f"<blockquote><p>{fact.quote}</p></blockquote>")
+    if used:
+        parts.append(f"<p>{t['source']} <cite>{_source_label(used[0], t)}</cite></p>")
+    return "\n".join(parts)
+
+
+def _fact_confidence(
+    used: list[RetrievedChunk], fact: ExtractedFact, *, translated: bool
+) -> Confidence:
+    """Confidence from the rerank scores, boosted only for verbatim fact hits.
+
+    The base `compute_confidence` stays pure and is always the source of the
+    numeric score; a deterministic fact match may only raise the *level*.
+    """
+    base = compute_confidence(used, translated=translated)
+    if fact.fact_type == "explanation":
+        return base
+    level = base.level
+    if fact.strength >= 0.8:
+        level = "high"
+    elif fact.strength >= 0.6 and level == "low":
+        level = "medium"
+    rationale = base.rationale
+    if fact.strength >= 0.8:
+        rationale = f"Deterministic fact extraction matched the source. {rationale}"
+    return Confidence(
+        level=level,
+        retrieval_score=base.retrieval_score,
+        source_agreement=base.source_agreement,
+        rationale=rationale,
+    )
+
+
 def _arabic_quotes(
-    chunks: list[RetrievedChunk], language: str, t: dict[str, str]
+    chunks: list[RetrievedChunk],
+    language: str,
+    t: dict[str, str],
+    *,
+    limit: int = _QUOTE_LIMIT,
 ) -> list[ArabicQuote]:
     quotes: list[ArabicQuote] = []
     for chunk in chunks:
@@ -150,7 +202,7 @@ def _arabic_quotes(
             continue
         quotes.append(
             ArabicQuote(
-                text=_truncate(text, _QUOTE_LIMIT),
+                text=_truncate(text, limit),
                 translation=_excerpt_label(chunk, language, t),
                 region=chunk.region,
             )
@@ -181,10 +233,6 @@ def _source_label(chunk: RetrievedChunk, t: dict[str, str]) -> str:
     return ", ".join(parts) or "unknown source"
 
 
-def _excerpt(text: str) -> str:
-    return _truncate(text, _EXCERPT_LIMIT)
-
-
 def _excerpt_label(chunk: RetrievedChunk, language: str, t: dict[str, str]) -> str:
     location = _source_label(chunk, t)
     if language == "bn":
@@ -209,11 +257,7 @@ def _truncate(text: str, limit: int) -> str:
 def _templates(language: str) -> dict[str, Any]:
     if language == "ar":
         return {
-            "lead": "وجدنا الأدلة التالية من المصادر المتعلقة بسؤالك:",
-            "note": (
-                "هذا ملخص أدلة آلي (وضع التراجع الحتمي)؛ لم يتم إنتاج تحليل بسبب عدم توفر "
-                "نموذج اللغة في هذا الوقت."
-            ),
+            "source": "المصدر:",
             "volume": "مجلد",
             "page": "صفحة",
             "caveat": (
@@ -228,12 +272,7 @@ def _templates(language: str) -> dict[str, Any]:
         }
     if language == "en":
         return {
-            "lead": "The following evidence was retrieved from the sources for your question:",
-            "note": (
-                "Automated evidence summary (deterministic fallback) — no reasoned "
-                "synthesis was produced because no language model was available at "
-                "this time."
-            ),
+            "source": "Source:",
             "volume": "vol.",
             "page": "p.",
             "caveat": (
@@ -247,11 +286,7 @@ def _templates(language: str) -> dict[str, Any]:
             "closest_heading": "Closest evidence found:",
         }
     return {
-        "lead": "আপনার প্রশ্নের সাথে সম্পর্কিত উৎস থেকে নিম্নোক্ত প্রমাণ (evidence) পাওয়া গেছে:",
-        "note": (
-            "এটি একটি স্বয়ংক্রিয় প্রমাণ-সারসংক্ষেপ (deterministic fallback) — এই মুহূর্তে "
-            "কোনো ভাষা মডেল উপলব্ধ না থাকায় যুক্তিসম্পন্ন বিশ্লেষণ তৈরি করা হয়নি।"
-        ),
+        "source": "উৎস:",
         "volume": "খণ্ড",
         "page": "পৃষ্ঠা",
         "caveat": (
