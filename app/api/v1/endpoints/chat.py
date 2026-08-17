@@ -55,6 +55,7 @@ from app.services.hybrid_search import PayloadFilter
 from app.services.retrieval import (
     RetrievalResult,
     RetrievalRunner,
+    RetrievedChunk,
     _retrieval_from_dict,
     _retrieval_to_dict,
 )
@@ -65,6 +66,8 @@ router = APIRouter(tags=["chat"])
 
 _DELTA_TOKENS = 4
 _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+# Client-visible excerpts stay short so the UI never renders the raw corpus.
+_SOURCE_EXCERPT_LIMIT = 200
 # Stable client-facing message for the SSE `error` event. The detailed exception
 # is logged server-side; never leak stack traces, provider internals, database
 # details, filesystem paths or secrets to the client.
@@ -129,14 +132,15 @@ def chat_question(
         )
 
     answer = get_generator().generate(retrieval, answer_language=request.answer_language)
-    cache.set(
-        cache_key,
-        {
-            "retrieval": _retrieval_to_dict(retrieval),
-            "answer": answer.model_dump(mode="json"),
-        },
-        ttl_seconds=get_settings().cache_qa_ttl_seconds,
-    )
+    if answer.refusal is None:
+        cache.set(
+            cache_key,
+            {
+                "retrieval": _retrieval_to_dict(retrieval),
+                "answer": answer.model_dump(mode="json"),
+            },
+            ttl_seconds=get_settings().cache_qa_ttl_seconds,
+        )
     _persist_history(session, retrieval, answer)
     return StreamingResponse(
         _stream_events(request, retrieval, answer),
@@ -192,6 +196,28 @@ def _persist_history(session: Session, retrieval: RetrievalResult, answer: ChatA
         confidence=answer.confidence.level,
         refusal=answer.refusal.reason if answer.refusal else None,
     )
+
+
+def _source_summary(chunk: RetrievedChunk) -> dict[str, object]:
+    """Compact client-facing summary of one retrieved chunk (no full text)."""
+    text = (chunk.text or "").strip().replace("\n", " ")
+    excerpt = (
+        text
+        if len(text) <= _SOURCE_EXCERPT_LIMIT
+        else text[:_SOURCE_EXCERPT_LIMIT].rstrip() + "…"
+    )
+    return {
+        "chunk_id": chunk.chunk_id,
+        "book_name": chunk.book_name,
+        "volume": chunk.volume,
+        "printed_page_start": chunk.printed_page_start,
+        "topic": chunk.topic,
+        "kitab": chunk.kitab,
+        "bab": chunk.bab,
+        "region": chunk.region,
+        "verified": chunk.verified,
+        "excerpt": excerpt,
+    }
 
 
 def _stream_cached_answer(
@@ -257,14 +283,15 @@ def _stream_generated_answer(
         if answer is None:
             raise RuntimeError("generation stream finished without an answer")
 
-        cache.set(
-            cache_key,
-            {
-                "retrieval": _retrieval_to_dict(retrieval),
-                "answer": answer.model_dump(mode="json"),
-            },
-            ttl_seconds=get_settings().cache_qa_ttl_seconds,
-        )
+        if answer.refusal is None:
+            cache.set(
+                cache_key,
+                {
+                    "retrieval": _retrieval_to_dict(retrieval),
+                    "answer": answer.model_dump(mode="json"),
+                },
+                ttl_seconds=get_settings().cache_qa_ttl_seconds,
+            )
         _persist_history(session, retrieval, answer)
         yield _sse("done", answer.model_dump(mode="json"))
     except Exception:
@@ -290,10 +317,9 @@ async def _stream_events(
             {
                 "count": len(retrieval.chunks),
                 "evidence_sufficient": retrieval.evidence_sufficient,
-                "chunks": [
-                    RetrievalChunk.model_validate(chunk).model_dump(mode="json")
-                    for chunk in retrieval.chunks
-                ],
+                # Compact summaries only — the full chunk payload stays in the
+                # database/`sources` field and is never streamed to the client.
+                "chunks": [_source_summary(chunk) for chunk in retrieval.chunks],
             },
         )
 

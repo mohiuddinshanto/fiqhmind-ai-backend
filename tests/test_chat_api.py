@@ -205,6 +205,31 @@ def test_chat_insufficient_evidence_emits_refusal(client: TestClient, monkeypatc
     assert "citation" not in names
 
 
+def test_chat_refusal_answer_is_not_cached(client: TestClient, monkeypatch) -> None:
+    calls = {"runner": 0}
+
+    class CountingRunner:
+        def __init__(self, session, store, **kwargs) -> None:
+            pass
+
+        def search(self, query, *, filters=None, top_n=None) -> RetrievalResult:
+            calls["runner"] += 1
+            return RetrievalResult(
+                query=query,
+                canonical_arabic_query="ما حكم الوضوء",
+                language="bn",
+                translated=True,
+                evidence_sufficient=False,
+                chunks=[],
+            )
+
+    monkeypatch.setattr(chat_endpoints, "RetrievalRunner", CountingRunner)
+    client.post("/api/v1/chat", json={"query": "অজানা প্রশ্ন"})
+    client.post("/api/v1/chat", json={"query": "অজানা প্রশ্ন"})
+    # Each call runs retrieval — the refusal is never served from cache.
+    assert calls["runner"] == 2
+
+
 def test_chat_forwards_filters_and_top_n(client: TestClient, monkeypatch) -> None:
     captured = {}
 
